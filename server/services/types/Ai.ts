@@ -22,3 +22,13 @@ export interface AiState {
     startedClaims: string[];
     diplomacy?: BotDiplomacyMemory;
 }
+
+// Persistent personality and memory of an AI player, kept separate from aiState
+// because the tactical AI resets that when it loses all its stars.
+export interface AiPersonaState {
+    key: string;
+    // Short private notes the bot keeps about promises, grudges and plans.
+    notes: string[];
+    // Production cycle of the last LLM strategy turn.
+    lastStrategyCycle: number;
+}

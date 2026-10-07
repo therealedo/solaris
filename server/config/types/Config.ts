@@ -34,4 +34,11 @@ export interface Config {
         botToken?: string;
     };
     frontend: FrontendConfig;
+    llm: {
+        geminiApiKey?: string;
+        geminiModel: string;
+        // Budget per server process (the API and jobs processes each have one).
+        requestsPerMinute: number;
+        requestsPerDay: number;
+    };
 }

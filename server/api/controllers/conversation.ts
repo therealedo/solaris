@@ -95,6 +95,16 @@ export default (container: DependencyContainer) => {
                     container.notificationService,
                 );
 
+                // AI players answer in the background.
+                if (container.gameTypeService.isSinglePlayerGame(req.game)) {
+                    container.botBrainService.onHumanMessage(
+                        req.game._id,
+                        req.params.conversationId,
+                        container.eventService,
+                        container.notificationService,
+                    );
+                }
+
                 res.status(200).send(message);
                 return next();
             } catch (err) {

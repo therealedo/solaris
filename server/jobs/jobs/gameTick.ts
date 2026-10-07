@@ -59,6 +59,13 @@ const tryTickGame = async (
             } finally {
                 await container.gameLockService.lock(gameId, false);
             }
+
+            // AI personas plan their diplomacy in the background after the tick.
+            container.botBrainService.onGameTicked(
+                gameId,
+                container.eventService,
+                container.notificationService,
+            );
         }
     } catch (e) {
         log.error(e);

@@ -1,6 +1,7 @@
 import { MathRandomGen, SeededRandomGen } from "../utils/randomGen";
 
 import { ValidationError } from "@solaris/common";
+import { pickPersonaKeys } from "./botPersonas";
 import { Game } from "./types/Game";
 import UserAchievementService from "./userAchievement";
 import ConversationService from "./conversation";
@@ -707,5 +708,19 @@ export default class GameCreateService {
             0,
         );
         this.gameJoinService.assignNonUserPlayersToAI(game);
+
+        // Give every AI opponent a personality for diplomacy and chat.
+        const bots = game.galaxy.players.filter((p) => !p.userId);
+        const personaKeys = pickPersonaKeys(bots.length, (max) =>
+            Math.floor(Math.random() * max),
+        );
+
+        bots.forEach((bot, i) => {
+            bot.aiPersona = {
+                key: personaKeys[i],
+                notes: [],
+                lastStrategyCycle: 0,
+            };
+        });
     }
 }

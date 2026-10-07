@@ -1,0 +1,643 @@
+import {
+    Conversation,
+    ConversationMessage,
+    GameTypeService,
+} from "@solaris/common";
+import BotDiplomacyService, {
+    BOT_DIPLOMACY_ACTIONS,
+    BotDiplomacyAction,
+    TurnContext,
+} from "./botDiplomacy";
+import { BotPersona, getPersona } from "./botPersonas";
+import { LlmProvider, LlmSchema, LlmUnavailableError } from "./llm/types";
+import Repository from "./repository";
+import { AiPersonaState } from "./types/Ai";
+import { DBObjectId } from "./types/DBObjectId";
+import { Game } from "./types/Game";
+import { IEventService } from "./types/IEventService";
+import { INotificationService } from "./types/INotificationService";
+import { Player } from "./types/Player";
+import { logger } from "../utils/logging";
+
+const log = logger("Bot Brain Service");
+
+const MAX_NOTES = 8;
+const MAX_MESSAGE_LENGTH = 400;
+const MAX_STRATEGY_ACTIONS = 2;
+const MAX_STRATEGY_MESSAGES = 2;
+const RECENT_MESSAGES_IN_PROMPT = 10;
+
+// How long a bot "types" before replying, so answers don't feel instant and robotic.
+const MIN_REPLY_DELAY_MS = 1500;
+const MAX_REPLY_DELAY_MS = 4000;
+
+interface ChatDecision {
+    reply: string;
+    action: BotDiplomacyAction;
+    memoryNote: string;
+}
+
+interface StrategyDecision {
+    plan: string;
+    actions: { target: string; action: BotDiplomacyAction }[];
+    messages: { to: string; text: string }[];
+}
+
+const ACTION_SCHEMA: LlmSchema = {
+    type: "string",
+    enum: BOT_DIPLOMACY_ACTIONS,
+    description:
+        "none, ally (offer or accept an alliance), breakAlliance (become neutral), declareWar, makePeace (end a war, become neutral)",
+};
+
+const CHAT_SCHEMA: LlmSchema = {
+    type: "object",
+    properties: {
+        reply: {
+            type: "string",
+            description: "Your in-character chat reply, 1-3 sentences.",
+        },
+        action: ACTION_SCHEMA,
+        memoryNote: {
+            type: "string",
+            description:
+                "A short private note to remember about this exchange (a promise, a threat, a plan), or empty.",
+        },
+    },
+    required: ["reply", "action", "memoryNote"],
+};
+
+const STRATEGY_SCHEMA: LlmSchema = {
+    type: "object",
+    properties: {
+        plan: {
+            type: "string",
+            description:
+                "Your private plan for this cycle in 1-2 sentences. Nobody else sees it.",
+        },
+        actions: {
+            type: "array",
+            description: `Diplomatic actions to take now, at most ${MAX_STRATEGY_ACTIONS}. Empty if none.`,
+            items: {
+                type: "object",
+                properties: {
+                    target: {
+                        type: "string",
+                        description: "Exact name of the other empire.",
+                    },
+                    action: ACTION_SCHEMA,
+                },
+                required: ["target", "action"],
+            },
+        },
+        messages: {
+            type: "array",
+            description: `Chat messages to send now, at most ${MAX_STRATEGY_MESSAGES}. Empty if you have nothing worth saying.`,
+            items: {
+                type: "object",
+                properties: {
+                    to: {
+                        type: "string",
+                        description:
+                            "Exact name of the empire to message privately, or 'everyone' for the global chat.",
+                    },
+                    text: { type: "string" },
+                },
+                required: ["to", "text"],
+            },
+        },
+    },
+    required: ["plan", "actions", "messages"],
+};
+
+// Gives AI players a personality backed by an LLM: answering chat in character and,
+// once per production cycle, planning diplomacy (alliances, betrayals, messages).
+// Without an LLM, or when it fails or runs out of free quota, chat falls back to the
+// rule based replies in BotDiplomacyService.
+export default class BotBrainService {
+    botDiplomacyService: BotDiplomacyService;
+    gameRepo: Repository<Game>;
+    gameTypeService: GameTypeService;
+    llmProvider: LlmProvider | null;
+    loadGame: (gameId: DBObjectId) => Promise<Game | null>;
+    delay: (ms: number) => Promise<void>;
+
+    private inFlight = new Set<string>();
+
+    constructor(
+        botDiplomacyService: BotDiplomacyService,
+        gameRepo: Repository<Game>,
+        gameTypeService: GameTypeService,
+        llmProvider: LlmProvider | null,
+        loadGame: (gameId: DBObjectId) => Promise<Game | null>,
+        delay: (ms: number) => Promise<void> = (ms) =>
+            new Promise((resolve) => setTimeout(resolve, ms)),
+    ) {
+        this.botDiplomacyService = botDiplomacyService;
+        this.gameRepo = gameRepo;
+        this.gameTypeService = gameTypeService;
+        this.llmProvider = llmProvider;
+        this.loadGame = loadGame;
+        this.delay = delay;
+    }
+
+    // Called after a human sends a chat message. Runs in the background so the
+    // sender's request isn't held up; errors are logged, never thrown.
+    onHumanMessage(
+        gameId: DBObjectId,
+        conversationId: DBObjectId,
+        eventService: IEventService,
+        notificationService: INotificationService,
+    ) {
+        this._runExclusive(`chat:${conversationId.toString()}`, async () => {
+            await this.delay(
+                MIN_REPLY_DELAY_MS +
+                    Math.random() * (MAX_REPLY_DELAY_MS - MIN_REPLY_DELAY_MS),
+            );
+            await this.replyToConversation(
+                gameId,
+                conversationId,
+                eventService,
+                notificationService,
+            );
+        });
+    }
+
+    // Called after a game tick. Runs one strategy turn per bot per production cycle.
+    onGameTicked(
+        gameId: DBObjectId,
+        eventService: IEventService,
+        notificationService: INotificationService,
+    ) {
+        if (!this.llmProvider) {
+            return;
+        }
+
+        this._runExclusive(`strategy:${gameId.toString()}`, () =>
+            this.playStrategyTurns(gameId, eventService, notificationService),
+        );
+    }
+
+    async replyToConversation(
+        gameId: DBObjectId,
+        conversationId: DBObjectId,
+        eventService: IEventService,
+        notificationService: INotificationService,
+    ) {
+        const ctx = await this._loadContext(
+            gameId,
+            eventService,
+            notificationService,
+        );
+
+        if (!ctx) {
+            return;
+        }
+
+        const convo = ctx.game.conversations.find(
+            (c) => c._id.toString() === conversationId.toString(),
+        );
+
+        if (!convo) {
+            return;
+        }
+
+        for (const bot of this.botDiplomacyService.listBots(ctx.game)) {
+            const message = this.botDiplomacyService.findPendingMessage(
+                ctx,
+                bot,
+                convo,
+            );
+
+            if (!message) {
+                continue;
+            }
+
+            try {
+                await this._replyAsBot(ctx, bot, convo, message);
+            } catch (e) {
+                log.error(e, `Bot ${bot.alias} failed to reply`);
+            }
+        }
+    }
+
+    async _replyAsBot(
+        ctx: TurnContext,
+        bot: Player,
+        convo: Conversation<DBObjectId>,
+        message: ConversationMessage<DBObjectId>,
+    ) {
+        const sender = this.botDiplomacyService.getPlayer(
+            ctx.game,
+            message.fromPlayerId!.toString(),
+        )!;
+
+        let decision: ChatDecision | null = null;
+
+        if (this.llmProvider && bot.aiPersona) {
+            try {
+                decision = await this.llmProvider.generateJson<ChatDecision>({
+                    system: this.buildSystemPrompt(ctx.game, bot),
+                    prompt: this.buildChatPrompt(ctx, bot, convo, sender),
+                    schema: CHAT_SCHEMA,
+                });
+            } catch (e) {
+                this._logLlmFailure(e, bot);
+            }
+        }
+
+        const reply = decision ? sanitizeMessage(decision.reply) : "";
+
+        if (!decision || !reply) {
+            await this.botDiplomacyService.replyWithRules(
+                ctx,
+                bot,
+                convo,
+                message,
+            );
+            return;
+        }
+
+        await this.botDiplomacyService.applyAction(
+            ctx,
+            bot,
+            sender,
+            decision.action,
+        );
+        await this.botDiplomacyService.send(ctx, bot, convo, reply);
+        await this._remember(ctx.game, bot, [
+            decision.memoryNote
+                ? `About ${sender.alias}: ${decision.memoryNote}`
+                : "",
+        ]);
+    }
+
+    async playStrategyTurns(
+        gameId: DBObjectId,
+        eventService: IEventService,
+        notificationService: INotificationService,
+    ) {
+        const ctx = await this._loadContext(
+            gameId,
+            eventService,
+            notificationService,
+        );
+
+        if (!ctx || !this.llmProvider) {
+            return;
+        }
+
+        const cycle = ctx.game.state.productionTick;
+
+        for (const bot of this.botDiplomacyService.listBots(ctx.game)) {
+            if (!bot.aiPersona || bot.aiPersona.lastStrategyCycle >= cycle) {
+                continue;
+            }
+
+            let decision: StrategyDecision;
+
+            try {
+                decision =
+                    await this.llmProvider.generateJson<StrategyDecision>({
+                        system: this.buildSystemPrompt(ctx.game, bot),
+                        prompt: this.buildStrategyPrompt(ctx, bot),
+                        schema: STRATEGY_SCHEMA,
+                    });
+            } catch (e) {
+                this._logLlmFailure(e, bot);
+
+                if (e instanceof LlmUnavailableError) {
+                    // Out of free quota: stop for now and try again after a later tick.
+                    return;
+                }
+
+                // A broken response shouldn't be retried every tick.
+                await this._remember(ctx.game, bot, [], cycle);
+                continue;
+            }
+
+            try {
+                await this._applyStrategy(ctx, bot, decision);
+            } catch (e) {
+                log.error(e, `Bot ${bot.alias} failed to apply its strategy`);
+            }
+
+            await this._remember(
+                ctx.game,
+                bot,
+                [decision.plan ? `Cycle ${cycle} plan: ${decision.plan}` : ""],
+                cycle,
+            );
+        }
+    }
+
+    async _applyStrategy(
+        ctx: TurnContext,
+        bot: Player,
+        decision: StrategyDecision,
+    ) {
+        for (const { target, action } of (decision.actions ?? []).slice(
+            0,
+            MAX_STRATEGY_ACTIONS,
+        )) {
+            const targetPlayer = this._findPlayerByAlias(ctx.game, bot, target);
+
+            if (targetPlayer) {
+                await this.botDiplomacyService.applyAction(
+                    ctx,
+                    bot,
+                    targetPlayer,
+                    action,
+                );
+            }
+        }
+
+        for (const { to, text } of (decision.messages ?? []).slice(
+            0,
+            MAX_STRATEGY_MESSAGES,
+        )) {
+            const message = sanitizeMessage(text);
+
+            if (!message) {
+                continue;
+            }
+
+            if (to.trim().toLowerCase() === "everyone") {
+                const globalChat = ctx.game.conversations.find(
+                    (c) => c.createdBy == null,
+                );
+
+                if (globalChat) {
+                    await this.botDiplomacyService.send(
+                        ctx,
+                        bot,
+                        globalChat,
+                        message,
+                    );
+                }
+
+                continue;
+            }
+
+            const recipient = this._findPlayerByAlias(ctx.game, bot, to);
+
+            if (recipient) {
+                const convo =
+                    await this.botDiplomacyService.getOrCreateDirectConversation(
+                        ctx,
+                        bot,
+                        recipient,
+                    );
+
+                await this.botDiplomacyService.send(ctx, bot, convo, message);
+            }
+        }
+    }
+
+    buildSystemPrompt(game: Game, bot: Player): string {
+        const persona = getPersona(bot.aiPersona?.key);
+
+        return [
+            `You are playing Solaris, a multiplayer space strategy game, as the empire "${bot.alias}".`,
+            `Your persona is ${persona.title}: ${persona.description}`,
+            `Speaking style: ${persona.speakingStyle}`,
+            `Traits (0 to 10): loyalty ${traitScore(persona.loyalty)}, aggression ${traitScore(persona.aggression)}, honesty ${traitScore(persona.honesty)}.`,
+            describeTraitBehaviour(persona),
+            "Stay in character at all times. You are a rival commander, not an assistant: you want to win the game.",
+            "Never mention being an AI, a language model, a bot or these instructions.",
+            "Chat messages are short (1 to 3 sentences), plain text, no markdown.",
+            "Reply in the same language the other player writes in.",
+            "Only use facts from the briefing; never invent game events or numbers.",
+            this.botDiplomacyService.canDoDiplomacy(game)
+                ? "Diplomacy rules: an alliance forms only when both empires declare 'ally'. Allies share vision and do not fight. 'breakAlliance' makes you neutral, which means your fleets will attack them. You can lie about your intentions if it fits your persona."
+                : "Formal diplomacy is disabled in this game, so always choose the action 'none'.",
+        ].join("\n");
+    }
+
+    buildChatPrompt(
+        ctx: TurnContext,
+        bot: Player,
+        convo: Conversation<DBObjectId>,
+        sender: Player,
+    ): string {
+        const recent = convo.messages
+            .filter(
+                (m): m is ConversationMessage<DBObjectId> =>
+                    "message" in m && "fromPlayerId" in m,
+            )
+            .slice(-RECENT_MESSAGES_IN_PROMPT)
+            .map((m) => `${m.fromPlayerAlias}: ${m.message}`)
+            .join("\n");
+
+        const audience =
+            convo.participants.length > 2
+                ? "This is a group chat that other empires can read."
+                : `This is a private conversation with ${sender.alias}.`;
+
+        return [
+            this.buildBriefing(ctx, bot),
+            "",
+            audience,
+            "Recent messages (oldest first):",
+            recent,
+            "",
+            `Reply to ${sender.alias}'s latest message. Choose a diplomatic action towards ${sender.alias} only if the conversation calls for it, otherwise 'none'.`,
+        ].join("\n");
+    }
+
+    buildStrategyPrompt(ctx: TurnContext, bot: Player): string {
+        return [
+            this.buildBriefing(ctx, bot),
+            "",
+            "A new production cycle has started. Decide your diplomacy for this cycle:",
+            "who to ally with, who to betray or attack, who to make peace with, and what to say.",
+            "Act like a real player with your persona: scheme, build coalitions against the leader, keep or break promises according to your traits.",
+            "Doing nothing is fine when nothing has changed. Don't spam messages.",
+        ].join("\n");
+    }
+
+    // A summary of the game from the bot's point of view, using only information a
+    // human player in its seat could see on the leaderboard and diplomacy screens.
+    buildBriefing(ctx: TurnContext, bot: Player): string {
+        const game = ctx.game;
+        const own = ctx.strengths.get(bot._id.toString());
+        const neighbourIds = this.botDiplomacyService._getNeighbourIds(
+            game,
+            bot,
+        );
+        const ranked = [...ctx.strengths.values()].sort(
+            (a, b) => b.stars - a.stars,
+        );
+        const rank =
+            ranked.findIndex((s) => s.playerId === bot._id.toString()) + 1;
+
+        const lines = [
+            `Briefing for ${bot.alias}. Game tick ${game.state.tick}, production cycle ${game.state.productionTick}. Victory requires ${ctx.starsForVictory} stars.`,
+            `Your empire: ${own?.stars ?? 0} stars, ${own?.ships ?? 0} ships, rank ${rank} of ${ranked.length}.`,
+            "Other empires:",
+        ];
+
+        for (const other of this.botDiplomacyService._listOtherPlayers(
+            game,
+            bot,
+        )) {
+            const strength = ctx.strengths.get(other._id.toString());
+            const status =
+                this.botDiplomacyService.diplomacyService.getDiplomaticStatusToPlayer(
+                    game,
+                    bot._id,
+                    other._id,
+                );
+
+            const comparison =
+                !strength || !own
+                    ? "unknown strength"
+                    : strength.strength > own.strength * 1.2
+                      ? "stronger than you"
+                      : strength.strength < own.strength * 0.8
+                        ? "weaker than you"
+                        : "about as strong as you";
+
+            const offers =
+                status.statusFrom === "allies" && status.statusTo !== "allies"
+                    ? " They have offered you an alliance."
+                    : status.statusTo === "allies" &&
+                        status.statusFrom !== "allies"
+                      ? " You have offered them an alliance."
+                      : "";
+
+            lines.push(
+                `- ${other.alias}: ${strength?.stars ?? 0} stars, ${strength?.ships ?? 0} ships, ${comparison}${neighbourIds.has(other._id.toString()) ? ", borders you" : ""}. Relationship: ${status.actualStatus}.${offers}`,
+            );
+        }
+
+        const notes = bot.aiPersona?.notes ?? [];
+
+        if (notes.length) {
+            lines.push("Your private memory:");
+            notes.forEach((n) => lines.push(`- ${n}`));
+        }
+
+        return lines.join("\n");
+    }
+
+    async _loadContext(
+        gameId: DBObjectId,
+        eventService: IEventService,
+        notificationService: INotificationService,
+    ): Promise<TurnContext | null> {
+        const game = await this.loadGame(gameId);
+
+        if (
+            !game ||
+            !this.botDiplomacyService.isEnabled(game) ||
+            !game.state.startDate ||
+            game.state.endDate
+        ) {
+            return null;
+        }
+
+        return this.botDiplomacyService.createContext(
+            game,
+            eventService,
+            notificationService,
+            true,
+        );
+    }
+
+    _findPlayerByAlias(game: Game, bot: Player, alias: string) {
+        const wanted = (alias || "").trim().toLowerCase();
+
+        return this.botDiplomacyService
+            ._listOtherPlayers(game, bot)
+            .find((p) => (p.alias || "").toLowerCase() === wanted);
+    }
+
+    async _remember(
+        game: Game,
+        bot: Player,
+        newNotes: string[],
+        lastStrategyCycle?: number,
+    ) {
+        const current: AiPersonaState = bot.aiPersona ?? {
+            key: getPersona(null).key,
+            notes: [],
+            lastStrategyCycle: 0,
+        };
+
+        const updated: AiPersonaState = {
+            key: current.key,
+            notes: [
+                ...current.notes,
+                ...newNotes
+                    .map((n) => sanitizeMessage(n))
+                    .filter((n) => n.length),
+            ].slice(-MAX_NOTES),
+            lastStrategyCycle: lastStrategyCycle ?? current.lastStrategyCycle,
+        };
+
+        bot.aiPersona = updated;
+
+        await this.gameRepo.updateOne(
+            { _id: game._id },
+            { $set: { "galaxy.players.$[p].aiPersona": updated } },
+            { arrayFilters: [{ "p._id": bot._id }] },
+        );
+    }
+
+    _logLlmFailure(e: unknown, bot: Player) {
+        if (e instanceof LlmUnavailableError) {
+            log.info(`LLM quota exhausted, ${bot.alias} falls back to rules`);
+        } else {
+            log.error(e, `LLM request failed for ${bot.alias}`);
+        }
+    }
+
+    _runExclusive(key: string, work: () => Promise<void>) {
+        if (this.inFlight.has(key)) {
+            return;
+        }
+
+        this.inFlight.add(key);
+
+        work()
+            .catch((e) => log.error(e, `Bot brain task ${key} failed`))
+            .finally(() => this.inFlight.delete(key));
+    }
+}
+
+function traitScore(value: number) {
+    return Math.round(value * 10);
+}
+
+function describeTraitBehaviour(persona: BotPersona): string {
+    const hints: string[] = [];
+
+    if (persona.loyalty >= 0.8) {
+        hints.push("You keep alliances and promises even when it costs you.");
+    } else if (persona.loyalty <= 0.3) {
+        hints.push(
+            "Alliances are tools to you; betray allies when it benefits you.",
+        );
+    }
+
+    if (persona.aggression >= 0.75) {
+        hints.push("You prefer war and conquest over peace.");
+    } else if (persona.aggression <= 0.3) {
+        hints.push("You avoid wars unless provoked.");
+    }
+
+    if (persona.honesty <= 0.3) {
+        hints.push("You lie and deceive freely.");
+    }
+
+    return hints.join(" ");
+}
+
+export function sanitizeMessage(text: string | null | undefined): string {
+    return (text ?? "")
+        .replace(/[*_`#>]/g, "")
+        .replace(/\s+/g, " ")
+        .trim()
+        .substring(0, MAX_MESSAGE_LENGTH);
+}

@@ -77,6 +77,8 @@ export function decideBetrayal(params: {
     starsForVictory: number;
     allyIsNeighbour: boolean;
     isThreatened: boolean;
+    // Persona loyalty from 0 (treacherous) to 1 (never betrays). Defaults to average.
+    loyalty?: number;
 }): BetrayalReason | null {
     const {
         bot,
@@ -86,9 +88,11 @@ export function decideBetrayal(params: {
         allyIsNeighbour,
         isThreatened,
     } = params;
+    const loyalty = params.loyalty ?? 0.5;
 
-    // Never help an ally across the finish line.
+    // Only the most loyal will help an ally across the finish line.
     if (
+        loyalty < 0.9 &&
         ally.playerId === leader.playerId &&
         isNearVictory(ally, starsForVictory)
     ) {
@@ -96,8 +100,9 @@ export function decideBetrayal(params: {
     }
 
     // Opportunistic backstab: a weak neighbouring ally is an easy target,
-    // but only when nobody else is threatening the bot.
+    // but only for disloyal bots and only when nobody else is threatening them.
     if (
+        loyalty <= 0.5 &&
         allyIsNeighbour &&
         !isThreatened &&
         bot.strength >= ally.strength * BACKSTAB_STRENGTH_RATIO

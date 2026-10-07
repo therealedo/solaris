@@ -67,6 +67,21 @@ Arm allowance as 2 OCPUs and 12 GB of memory, so create the VM with those values
    ```
 7. Open `https://my-solaris.duckdns.org`. Caddy gets the HTTPS certificate on first visit.
 
+## Optional: AI personas with Google Gemini (free)
+
+Without an API key, bots in single player games use simple rules for diplomacy and
+chat. With a free Gemini key, each bot plays a persona (the Warlord, the Silver Tongue,
+the Diplomat...), answers your messages in character and schemes once per production cycle.
+
+1. Sign in at https://aistudio.google.com/apikey with a Google account and create a key.
+   Don't add billing to that Google Cloud project, so it stays on the free tier.
+2. Put it in `docker/selfhost/.env` as `GEMINI_API_KEY=...` and run the `up -d --build` command again.
+
+The default budget (5 requests a minute and 400 a day for each of the two server
+processes) keeps usage inside the free tier. When the budget runs out, bots quietly fall
+back to rules until it resets. Note that Google may use free tier prompts to improve its
+products, so don't put anything private in chat.
+
 **Updating** after new commits: `git pull` and run the same `up -d --build` command.
 
 **Things to know**

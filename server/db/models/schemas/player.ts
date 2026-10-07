@@ -31,6 +31,7 @@ const schema = new Schema({
     defeatedDate: { type: Types.Date, required: false, default: null },
     afk: { type: Types.Boolean, required: false, default: false }, // TODO: Same treatment as with defeatedDate.
     aiState: { type: Types.Mixed, required: false, default: null },
+    aiPersona: { type: Types.Mixed, required: false, default: null },
     renownToGive: { type: Types.Number, required: true, default: 8 },
     ready: { type: Types.Boolean, required: false, default: false },
     readyToCycle: { type: Types.Boolean, required: false, default: false },

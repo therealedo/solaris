@@ -13,6 +13,11 @@ x-server-env: &server-env
   SMTP_ENABLED: "false"
   FRONTEND_APP_API_HOST: ${SITE_URL}
   FRONTEND_APP_SOCKETS_HOST: ${SITE_URL}
+  # Optional: lets AI personas chat and scheme with Gemini (free tier key from aistudio.google.com).
+  GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+  GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.5-flash-lite}
+  LLM_REQUESTS_PER_MINUTE: ${LLM_REQUESTS_PER_MINUTE:-5}
+  LLM_REQUESTS_PER_DAY: ${LLM_REQUESTS_PER_DAY:-400}
 
 services:
   api:

@@ -115,6 +115,7 @@ describe("botDiplomacy", () => {
             new DistanceService(),
             new GameTypeService(),
             { getRandomNumber: () => 0 } as any,
+            null,
         );
     });
 
@@ -161,7 +162,26 @@ describe("botDiplomacy", () => {
         expect(messagesAfterSecondTick.length).toBe(1);
     });
 
-    it("should reply to a direct message once", async () => {
+    const replyWithRules = async () => {
+        const ctx = service.createContext(
+            game,
+            fakeEventService,
+            fakeNotificationService,
+            false,
+        )!;
+
+        for (const convo of game.conversations) {
+            for (const b of service.listBots(game)) {
+                const message = service.findPendingMessage(ctx, b, convo);
+
+                if (message) {
+                    await service.replyWithRules(ctx, b, convo, message);
+                }
+            }
+        }
+    };
+
+    it("should not answer chat during the game tick", async () => {
         game.conversations.push({
             _id: "dm",
             participants: ["human", "bot"],
@@ -171,7 +191,21 @@ describe("botDiplomacy", () => {
         });
 
         await play();
-        await play();
+
+        expect(sent.length).toBe(0);
+    });
+
+    it("should reply to a direct message once", async () => {
+        game.conversations.push({
+            _id: "dm",
+            participants: ["human", "bot"],
+            messages: [
+                { fromPlayerId: "human", message: "Hello Robo!", sentTick: 5 },
+            ],
+        });
+
+        await replyWithRules();
+        await replyWithRules();
 
         const replies = sent.filter((s) => s.convo._id === "dm");
 
@@ -193,7 +227,7 @@ describe("botDiplomacy", () => {
             ],
         });
 
-        await play();
+        await replyWithRules();
 
         const replies = sent.filter((s) => s.convo._id === "global");
 
@@ -201,6 +235,24 @@ describe("botDiplomacy", () => {
         expect(replies[0].from).toBe("bot2");
         // Asking for an alliance makes the bot offer one back.
         expect(status(otherBot, human).statusTo).toBe("allies");
+    });
+
+    it("should refuse actions the rules don't allow", async () => {
+        game.settings.diplomacy.lockedAlliances = "enabled";
+        human.diplomacy.push({ playerId: "bot", status: "allies" });
+        bot.diplomacy.push({ playerId: "human", status: "allies" });
+
+        const ctx = service.createContext(
+            game,
+            fakeEventService,
+            fakeNotificationService,
+            false,
+        )!;
+
+        expect(
+            await service.applyAction(ctx, bot, human, "breakAlliance"),
+        ).toBeFalse();
+        expect(status(bot, human).actualStatus).toBe("allies");
     });
 
     it("should betray an ally that is about to win", async () => {

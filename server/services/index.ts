@@ -65,6 +65,8 @@ import ReputationService from "./reputation";
 import BasicAIService from "./basicAi";
 import AIService from "./ai";
 import BotDiplomacyService from "./botDiplomacy";
+import BotBrainService from "./botBrain";
+import { createLlmProvider } from "./llm";
 import GuildService from "./guild";
 import GuildUserService from "./guildUser";
 import StarMovementService from "./starMovement";
@@ -749,6 +751,7 @@ export default (
         starService,
         combatProcessingService,
     );
+    const llmProvider = createLlmProvider(config);
     const botDiplomacyService = new BotDiplomacyService(
         diplomacyService,
         conversationService,
@@ -757,6 +760,14 @@ export default (
         distanceService,
         gameTypeService,
         randomService,
+        llmProvider,
+    );
+    const botBrainService = new BotBrainService(
+        botDiplomacyService,
+        gameRepository,
+        gameTypeService,
+        llmProvider,
+        (gameId) => gameService.getByIdAll(gameId),
     );
     const gameTickService = new GameTickService(
         distanceService,
@@ -908,6 +919,7 @@ export default (
         gameGalaxyService,
         gameListService,
         gameTickService,
+        botBrainService,
         gameTypeService,
         gameStateService,
         guildService,

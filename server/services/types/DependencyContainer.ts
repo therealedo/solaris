@@ -1,4 +1,5 @@
 import { Config } from "../../config/types/Config";
+import BotBrainService from "../botBrain";
 import { DiplomacyServerSocketEmitter } from "../../sockets/socketEmitters/diplomacy";
 import { GameServerSocketEmitter } from "../../sockets/socketEmitters/game";
 import { PlayerServerSocketEmitter } from "../../sockets/socketEmitters/player";
@@ -139,6 +140,7 @@ export interface DependencyContainer {
     gameGalaxyService: GameGalaxyService;
     gameListService: GameListService;
     gameTickService: GameTickService;
+    botBrainService: BotBrainService;
     gameTypeService: GameTypeService;
     gameStateService: GameStateService;
     guildService: GuildService;

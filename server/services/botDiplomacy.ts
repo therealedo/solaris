@@ -28,6 +28,8 @@ import {
     isThreat,
 } from "./botDiplomacyPolicy";
 import { logger } from "../utils/logging";
+import { getPersona } from "./botPersonas";
+import { LlmProvider } from "./llm/types";
 
 const log = logger("Bot Diplomacy Service");
 
@@ -43,8 +45,22 @@ const NEIGHBOUR_HYPERSPACE_JUMPS = 2;
 // answer stale conversations.
 const REPLY_WINDOW_CYCLES = 1;
 
-interface TurnContext {
+export type BotDiplomacyAction =
+    "none" | "ally" | "breakAlliance" | "declareWar" | "makePeace";
+
+export const BOT_DIPLOMACY_ACTIONS: BotDiplomacyAction[] = [
+    "none",
+    "ally",
+    "breakAlliance",
+    "declareWar",
+    "makePeace",
+];
+
+export interface TurnContext {
     game: Game;
+    // False during a game tick, where the tick saves the game afterwards.
+    // True when acting outside a tick (for example replying to chat).
+    saveToDB: boolean;
     eventService: IEventService;
     notificationService: INotificationService;
     strengths: Map<string, PlayerStrength>;
@@ -66,6 +82,7 @@ export default class BotDiplomacyService {
     distanceService: DistanceService;
     gameTypeService: GameTypeService;
     randomService: RandomService;
+    llmProvider: LlmProvider | null;
 
     constructor(
         diplomacyService: DiplomacyService,
@@ -75,6 +92,7 @@ export default class BotDiplomacyService {
         distanceService: DistanceService,
         gameTypeService: GameTypeService,
         randomService: RandomService,
+        llmProvider: LlmProvider | null,
     ) {
         this.diplomacyService = diplomacyService;
         this.conversationService = conversationService;
@@ -83,6 +101,7 @@ export default class BotDiplomacyService {
         this.distanceService = distanceService;
         this.gameTypeService = gameTypeService;
         this.randomService = randomService;
+        this.llmProvider = llmProvider;
     }
 
     isEnabled(game: Game) {
@@ -106,31 +125,16 @@ export default class BotDiplomacyService {
         }
 
         const bots = this.listBots(game);
-
-        if (!bots.length) {
-            return;
-        }
-
-        const strengths = this._calculateStrengths(game);
-        const leader = [...strengths.values()].sort(
-            (a, b) => b.stars - a.stars || b.strength - a.strength,
-        )[0];
-
-        if (!leader) {
-            return;
-        }
-
-        const ctx: TurnContext = {
+        const ctx = this.createContext(
             game,
             eventService,
             notificationService,
-            strengths,
-            leader,
-            starsForVictory: game.state.starsForVictory,
-            isFirstTickOfCycle:
-                game.state.tick % game.settings.galaxy.productionTicks === 1,
-            conversations: game.conversations.slice(),
-        };
+            false,
+        );
+
+        if (!bots.length || !ctx) {
+            return;
+        }
 
         for (const bot of bots) {
             try {
@@ -145,18 +149,52 @@ export default class BotDiplomacyService {
         }
     }
 
+    createContext(
+        game: Game,
+        eventService: IEventService,
+        notificationService: INotificationService,
+        saveToDB: boolean,
+    ): TurnContext | null {
+        const strengths = this._calculateStrengths(game);
+        const leader = [...strengths.values()].sort(
+            (a, b) => b.stars - a.stars || b.strength - a.strength,
+        )[0];
+
+        if (!leader) {
+            return null;
+        }
+
+        return {
+            game,
+            saveToDB,
+            eventService,
+            notificationService,
+            strengths,
+            leader,
+            starsForVictory: game.state.starsForVictory,
+            isFirstTickOfCycle:
+                game.state.tick % game.settings.galaxy.productionTicks === 1,
+            conversations: game.conversations.slice(),
+        };
+    }
+
+    canDoDiplomacy(game: Game) {
+        return (
+            this.diplomacyService.isFormalAlliancesEnabled(game) &&
+            !this.diplomacyService.isTeamGame(game)
+        );
+    }
+
+    // Chat is answered as soon as a message arrives (see BotBrainService), so the
+    // tick only handles alliance offers and, without an LLM, proactive diplomacy.
     async _playBot(ctx: TurnContext, bot: Player) {
         const memory = this._getMemory(bot);
 
-        await this._replyToMessages(ctx, bot);
-
-        if (
-            this.diplomacyService.isFormalAlliancesEnabled(ctx.game) &&
-            !this.diplomacyService.isTeamGame(ctx.game)
-        ) {
+        if (this.canDoDiplomacy(ctx.game)) {
             await this._answerAllianceOffers(ctx, bot, memory);
 
-            if (ctx.isFirstTickOfCycle) {
+            // With an LLM the persona plans proactive diplomacy once per cycle instead.
+            if (ctx.isFirstTickOfCycle && !this.llmProvider) {
                 const betrayed = await this._considerBetrayal(ctx, bot);
 
                 if (!betrayed) {
@@ -246,23 +284,16 @@ export default class BotDiplomacyService {
                 starsForVictory: ctx.starsForVictory,
                 allyIsNeighbour: neighbourIds.has(ally._id.toString()),
                 isThreatened,
+                loyalty: bot.aiPersona
+                    ? getPersona(bot.aiPersona.key).loyalty
+                    : undefined,
             });
 
             if (!reason) {
                 continue;
             }
 
-            await this.diplomacyService.declareNeutral(
-                ctx.eventService,
-                ctx.game,
-                bot._id,
-                ally._id,
-                false,
-            );
-
-            // Without an alliance the AI treats the former ally as a target,
-            // and the low reputation stops it from re-allying straight away.
-            this._setReputation(bot, ally, BETRAYED_REPUTATION);
+            await this._breakAlliance(ctx, bot, ally);
 
             await this._message(
                 ctx,
@@ -334,8 +365,8 @@ export default class BotDiplomacyService {
             return;
         }
 
-        const targetPlayer = this._getPlayer(ctx.game, target.playerId)!;
-        const threatPlayer = this._getPlayer(
+        const targetPlayer = this.getPlayer(ctx.game, target.playerId)!;
+        const threatPlayer = this.getPlayer(
             ctx.game,
             threats.sort((a, b) => b.strength - a.strength)[0].playerId,
         )!;
@@ -348,74 +379,159 @@ export default class BotDiplomacyService {
         });
     }
 
-    async _replyToMessages(ctx: TurnContext, bot: Player) {
+    // The latest message from a human in this conversation that the bot has not answered yet.
+    // In group chats bots only answer messages that mention them by name.
+    findPendingMessage(
+        ctx: TurnContext,
+        bot: Player,
+        convo: Conversation<DBObjectId>,
+    ): ConversationMessage<DBObjectId> | null {
         const botId = bot._id.toString();
+
+        if (!convo.participants.some((p) => p.toString() === botId)) {
+            return null;
+        }
+
         const oldestTick =
             ctx.game.state.tick -
             REPLY_WINDOW_CYCLES * ctx.game.settings.galaxy.productionTicks;
+        const isGroupChat = convo.participants.length > 2;
+        const messages = convo.messages.filter(
+            (m): m is ConversationMessage<DBObjectId> =>
+                "message" in m && "fromPlayerId" in m,
+        );
 
-        for (const convo of ctx.conversations) {
-            if (!convo.participants.some((p) => p.toString() === botId)) {
-                continue;
+        let lastBotIndex = -1;
+        messages.forEach((m, i) => {
+            if (m.fromPlayerId?.toString() === botId) {
+                lastBotIndex = i;
             }
+        });
 
-            const isGroupChat = convo.participants.length > 2;
-            const messages = convo.messages.filter(
-                (m): m is ConversationMessage<DBObjectId> =>
-                    "message" in m && "fromPlayerId" in m,
+        const pending = messages
+            .slice(lastBotIndex + 1)
+            .filter((m) => (m.sentTick ?? 0) >= oldestTick)
+            .filter((m) => {
+                const sender = m.fromPlayerId
+                    ? this.getPlayer(ctx.game, m.fromPlayerId.toString())
+                    : null;
+
+                // Only humans get answers, otherwise bots would talk to each other forever.
+                return sender != null && sender.userId != null;
+            })
+            .filter(
+                (m) =>
+                    !isGroupChat ||
+                    m.message
+                        .toLowerCase()
+                        .includes((bot.alias || "").toLowerCase()),
             );
 
-            let lastBotIndex = -1;
-            messages.forEach((m, i) => {
-                if (m.fromPlayerId?.toString() === botId) {
-                    lastBotIndex = i;
-                }
-            });
+        return pending[pending.length - 1] ?? null;
+    }
 
-            const pending = messages
-                .slice(lastBotIndex + 1)
-                .filter((m) => (m.sentTick ?? 0) >= oldestTick)
-                .filter((m) => {
-                    const sender = m.fromPlayerId
-                        ? this._getPlayer(ctx.game, m.fromPlayerId.toString())
-                        : null;
+    // Rule based chat reply, used when no LLM is configured or it is unavailable.
+    async replyWithRules(
+        ctx: TurnContext,
+        bot: Player,
+        convo: Conversation<DBObjectId>,
+        message: ConversationMessage<DBObjectId>,
+    ) {
+        const sender = this.getPlayer(
+            ctx.game,
+            message.fromPlayerId!.toString(),
+        )!;
 
-                    // Only humans get answers, otherwise bots would talk to each other forever.
-                    return sender != null && sender.userId != null;
-                })
-                .filter(
-                    (m) =>
-                        !isGroupChat ||
-                        m.message
-                            .toLowerCase()
-                            .includes((bot.alias || "").toLowerCase()),
-                );
+        const key = await this._respondToIntent(
+            ctx,
+            bot,
+            sender,
+            classifyMessage(message.message),
+        );
 
-            const latest = pending[pending.length - 1];
+        await this.send(
+            ctx,
+            bot,
+            convo,
+            this._format(key, { player: sender.alias }),
+        );
+    }
 
-            if (!latest) {
-                continue;
-            }
-
-            const sender = this._getPlayer(
-                ctx.game,
-                latest.fromPlayerId!.toString(),
-            )!;
-
-            const key = await this._respondToIntent(
-                ctx,
-                bot,
-                sender,
-                classifyMessage(latest.message),
-            );
-
-            await this._send(
-                ctx,
-                bot,
-                convo,
-                this._format(key, { player: sender.alias }),
-            );
+    // Applies a diplomatic action chosen by an LLM, if the game rules allow it.
+    // Returns whether anything changed.
+    async applyAction(
+        ctx: TurnContext,
+        bot: Player,
+        target: Player,
+        action: BotDiplomacyAction,
+    ): Promise<boolean> {
+        if (action === "none" || !this.canDoDiplomacy(ctx.game)) {
+            return false;
         }
+
+        const status = this.diplomacyService.getDiplomaticStatusToPlayer(
+            ctx.game,
+            bot._id,
+            target._id,
+        );
+        const isLocked =
+            this.diplomacyService.isAllianceLocked(ctx.game) &&
+            status.actualStatus === "allies";
+
+        switch (action) {
+            case "ally":
+                if (
+                    status.statusTo === "allies" ||
+                    this._isAtAllianceCap(ctx.game, bot)
+                ) {
+                    return false;
+                }
+
+                await this._declareAlly(ctx, bot, target);
+                return true;
+            case "breakAlliance":
+                if (status.statusTo !== "allies" || isLocked) {
+                    return false;
+                }
+
+                await this._breakAlliance(ctx, bot, target);
+                return true;
+            case "declareWar":
+                if (status.statusTo === "enemies" || isLocked) {
+                    return false;
+                }
+
+                await this.diplomacyService.declareEnemy(
+                    ctx.eventService,
+                    ctx.game,
+                    bot._id,
+                    target._id,
+                    ctx.saveToDB,
+                );
+                await this._setReputation(
+                    ctx,
+                    bot,
+                    target,
+                    BETRAYED_REPUTATION,
+                );
+                return true;
+            case "makePeace":
+                if (status.statusTo !== "enemies") {
+                    return false;
+                }
+
+                await this.diplomacyService.declareNeutral(
+                    ctx.eventService,
+                    ctx.game,
+                    bot._id,
+                    target._id,
+                    ctx.saveToDB,
+                );
+                await this._setReputation(ctx, bot, target, 0);
+                return true;
+        }
+
+        return false;
     }
 
     async _respondToIntent(
@@ -481,7 +597,7 @@ export default class BotDiplomacyService {
                         ctx.game,
                         bot._id,
                         sender._id,
-                        false,
+                        ctx.saveToDB,
                     );
                 }
 
@@ -515,18 +631,58 @@ export default class BotDiplomacyService {
             ctx.game,
             bot._id,
             other._id,
-            false,
+            ctx.saveToDB,
         );
 
         // Keep reputation consistent with the alliance so the reputation service
         // doesn't flip the bot back to neutral on its next recalculation.
-        const rep = this.reputationService.getReputation(bot, other).reputation;
-        rep.score = Math.max(rep.score, ALLY_REPUTATION);
+        const score = this.reputationService.getReputation(bot, other)
+            .reputation.score;
+
+        await this._setReputation(
+            ctx,
+            bot,
+            other,
+            Math.max(score, ALLY_REPUTATION),
+        );
     }
 
-    _setReputation(bot: Player, other: Player, score: number) {
-        this.reputationService.getReputation(bot, other).reputation.score =
-            score;
+    async _breakAlliance(ctx: TurnContext, bot: Player, ally: Player) {
+        await this.diplomacyService.declareNeutral(
+            ctx.eventService,
+            ctx.game,
+            bot._id,
+            ally._id,
+            ctx.saveToDB,
+        );
+
+        // Without an alliance the AI treats the former ally as a target,
+        // and the low reputation stops it from re-allying straight away.
+        await this._setReputation(ctx, bot, ally, BETRAYED_REPUTATION);
+    }
+
+    async _setReputation(
+        ctx: TurnContext,
+        bot: Player,
+        other: Player,
+        score: number,
+    ) {
+        const { reputation, isNew } = this.reputationService.getReputation(
+            bot,
+            other,
+        );
+
+        reputation.score = score;
+
+        if (ctx.saveToDB) {
+            await this.reputationService._updateReputation(
+                ctx.game,
+                bot,
+                other,
+                reputation,
+                isNew,
+            );
+        }
     }
 
     _isAtAllianceCap(game: Game, bot: Player) {
@@ -550,7 +706,7 @@ export default class BotDiplomacyService {
                     this.diplomacyService.getDiplomaticStatusToPlayer(
                         ctx.game,
                         bot._id,
-                        this._getPlayer(ctx.game, id)!._id,
+                        this.getPlayer(ctx.game, id)!._id,
                     ).actualStatus !== "allies",
             )
             .map((id) => ctx.strengths.get(id))
@@ -621,7 +777,7 @@ export default class BotDiplomacyService {
         );
     }
 
-    _getPlayer(game: Game, playerId: string) {
+    getPlayer(game: Game, playerId: string) {
         return game.galaxy.players.find((p) => p._id.toString() === playerId);
     }
 
@@ -657,9 +813,9 @@ export default class BotDiplomacyService {
         key: BotMessageKey,
         values: Record<string, string> = {},
     ) {
-        const convo = await this._getOrCreateDirectConversation(ctx, bot, to);
+        const convo = await this.getOrCreateDirectConversation(ctx, bot, to);
 
-        await this._send(
+        await this.send(
             ctx,
             bot,
             convo,
@@ -667,7 +823,7 @@ export default class BotDiplomacyService {
         );
     }
 
-    async _send(
+    async send(
         ctx: TurnContext,
         bot: Player,
         convo: Conversation<DBObjectId>,
@@ -682,7 +838,7 @@ export default class BotDiplomacyService {
         );
     }
 
-    async _getOrCreateDirectConversation(
+    async getOrCreateDirectConversation(
         ctx: TurnContext,
         bot: Player,
         to: Player,
