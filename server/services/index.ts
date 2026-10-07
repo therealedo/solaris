@@ -64,6 +64,7 @@ import ConversationService from "./conversation";
 import ReputationService from "./reputation";
 import BasicAIService from "./basicAi";
 import AIService from "./ai";
+import BotDiplomacyService from "./botDiplomacy";
 import GuildService from "./guild";
 import GuildUserService from "./guildUser";
 import StarMovementService from "./starMovement";
@@ -748,6 +749,15 @@ export default (
         starService,
         combatProcessingService,
     );
+    const botDiplomacyService = new BotDiplomacyService(
+        diplomacyService,
+        conversationService,
+        reputationService,
+        playerStatisticsService,
+        distanceService,
+        gameTypeService,
+        randomService,
+    );
     const gameTickService = new GameTickService(
         distanceService,
         starService,
@@ -783,6 +793,7 @@ export default (
         carrierTravelService,
         carrierCombatService,
         combatProcessingService,
+        botDiplomacyService,
     );
     const emailService = new EmailService(
         config,

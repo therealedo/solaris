@@ -58,6 +58,7 @@ import { EventService } from "./event";
 import StatisticsService from "./statistics";
 import { NotificationService } from "./notification";
 import { EmailService } from "./email";
+import BotDiplomacyService from "./botDiplomacy";
 
 const log = logger("Game Tick Service");
 
@@ -100,6 +101,7 @@ export default class GameTickService extends EventEmitter {
     carrierTravelService: CarrierTravelService<DBObjectId>;
     carrierCombatService: CarrierCombatService;
     combatProcessingService: CombatProcessingService;
+    botDiplomacyService: BotDiplomacyService;
 
     constructor(
         distanceService: DistanceService,
@@ -136,6 +138,7 @@ export default class GameTickService extends EventEmitter {
         carrierTravelService: CarrierTravelService<DBObjectId>,
         carrierCombatService: CarrierCombatService,
         combatProcessingService: CombatProcessingService,
+        botDiplomacyService: BotDiplomacyService,
     ) {
         super();
 
@@ -173,6 +176,7 @@ export default class GameTickService extends EventEmitter {
         this.carrierTravelService = carrierTravelService;
         this.carrierCombatService = carrierCombatService;
         this.combatProcessingService = combatProcessingService;
+        this.botDiplomacyService = botDiplomacyService;
     }
 
     async tick(
@@ -395,6 +399,13 @@ export default class GameTickService extends EventEmitter {
 
             iterations--;
         }
+
+        await this.botDiplomacyService.play(
+            game,
+            context.getEventService(),
+            context.getNotificationService(),
+        );
+        logTime("AI diplomacy and chat");
 
         this._sanitiseDarkModeCarrierWaypoints(game);
         logTime("Sanitise dark mode carrier waypoints");
