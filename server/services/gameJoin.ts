@@ -406,7 +406,11 @@ export default class GameJoinService extends EventEmitter {
     startGame(game: Game) {
         let startDate = DateTime.utc();
 
-        if (this.gameTypeService.isRealTimeGame(game)) {
+        // Solo games have nobody else to wait for, so they start straight away.
+        if (
+            this.gameTypeService.isRealTimeGame(game) &&
+            !this.gameTypeService.isSoloGame(game)
+        ) {
             // Add the start delay to the start date.
             startDate = startDate.plus({
                 minutes: game.settings.gameTime.startDelay,

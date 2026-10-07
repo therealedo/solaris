@@ -266,6 +266,7 @@ export default class GameCreateService {
             this._setupTutorialPlayers(game);
         } else if (isSinglePlayer) {
             await this._setupSinglePlayerPlayers(game);
+            this.conversationService.createConversationAllPlayers(game);
         } else {
             this.conversationService.createConversationAllPlayers(game);
         }

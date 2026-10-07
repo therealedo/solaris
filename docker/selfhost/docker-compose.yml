@@ -1,0 +1,73 @@
+# Self hosted Solaris built from this repository.
+# Usage (from the repository root):
+#   cp docker/selfhost/.env.example docker/selfhost/.env   # then edit it
+#   docker compose -f docker/selfhost/docker-compose.yml --env-file docker/selfhost/.env up -d --build
+
+x-server-env: &server-env
+  CONNECTION_STRING: "mongodb://database:27017/solaris"
+  CLIENT_URL: ${SITE_URL}
+  CORS_URLS: ${SITE_URL}
+  SERVER_URL: ${SITE_URL}
+  SESSION_SECRET: ${SESSION_SECRET}
+  SESSION_SECURE_COOKIES: ${SESSION_SECURE_COOKIES:-false}
+  SMTP_ENABLED: "false"
+  FRONTEND_APP_API_HOST: ${SITE_URL}
+  FRONTEND_APP_SOCKETS_HOST: ${SITE_URL}
+
+services:
+  api:
+    build:
+      context: ../..
+      dockerfile: docker/selfhost/Dockerfile
+      target: api
+    environment:
+      <<: *server-env
+      PORT: 3000
+    depends_on:
+      - database
+    restart: unless-stopped
+
+  jobs:
+    build:
+      context: ../..
+      dockerfile: docker/selfhost/Dockerfile
+      target: jobs
+    environment:
+      <<: *server-env
+    depends_on:
+      - database
+    restart: unless-stopped
+
+  client:
+    build:
+      context: ../..
+      dockerfile: docker/selfhost/Dockerfile
+      target: client
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+    depends_on:
+      - api
+      - client
+    restart: unless-stopped
+
+  database:
+    image: mongo:8.0
+    volumes:
+      - dbdata:/data/db
+    environment:
+      - GLIBC_TUNABLES=glibc.pthread.rseq=1
+    restart: unless-stopped
+
+volumes:
+  dbdata:
+  caddy_data:

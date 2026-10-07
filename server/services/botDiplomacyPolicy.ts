@@ -205,8 +205,8 @@ export const BOT_MESSAGES = {
         "You have my word, {player}. We're in this together.",
     ],
     replyAllianceInvite: [
-        "Declare me an ally and I'll consider it, {player}.",
-        "Send the alliance offer through diplomacy and I'll give it serious thought.",
+        "I've declared you an ally, {player}. Declare me back and it's done.",
+        "Deal. My alliance offer is waiting for you in diplomacy, {player}.",
     ],
     replyThreat: [
         "Bold words, {player}. My fleets are waiting.",
