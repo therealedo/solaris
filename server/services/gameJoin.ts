@@ -278,7 +278,7 @@ export default class GameJoinService extends EventEmitter {
 
         await game.save();
 
-        if (player.userId && !this.gameTypeService.isTutorialGame(game)) {
+        if (player.userId && !this.gameTypeService.isSoloGame(game)) {
             await this.achievementService.incrementJoined(player.userId);
         }
 
@@ -378,13 +378,13 @@ export default class GameJoinService extends EventEmitter {
         if (!game.state.startDate) {
             // Start the game if all slots have been filled
             // OR its a new player game, half or more are filled
-            // OR its a tutorial game and a player has joined
+            // OR its a solo game (tutorial or single player) and a player has joined
             shouldStartGame =
                 game.state.players === game.settings.general.playerLimit ||
                 (this.gameTypeService.isNewPlayerGame(game) &&
                     game.state.players >=
                         game.settings.general.playerLimit / 2) ||
-                (this.gameTypeService.isTutorialGame(game) &&
+                (this.gameTypeService.isSoloGame(game) &&
                     game.state.players > 0);
 
             if (shouldStartGame) {
@@ -466,8 +466,8 @@ export default class GameJoinService extends EventEmitter {
             }
 
             if (slotsOpen === undefined) {
-                // If it's a tutorial game we want to keep the slot closed.
-                player.isOpenSlot = !this.gameTypeService.isTutorialGame(game);
+                // If it's a solo game (tutorial or single player) we want to keep the slot closed.
+                player.isOpenSlot = !this.gameTypeService.isSoloGame(game);
             } else {
                 player.isOpenSlot = slotsOpen;
             }

@@ -130,6 +130,7 @@ export default class GameCreateService {
         userId: DBObjectId | null,
     ) {
         const isTutorial = settingsReq.general.type === "tutorial";
+        const isSinglePlayer = settingsReq.general.type === "single_player";
         const isCustomGalaxy = settingsReq.galaxy.galaxyType === "custom";
         const isAdvancedCustomGalaxy =
             isCustomGalaxy &&
@@ -263,6 +264,8 @@ export default class GameCreateService {
 
         if (isTutorial) {
             this._setupTutorialPlayers(game);
+        } else if (isSinglePlayer) {
+            await this._setupSinglePlayerPlayers(game);
         } else {
             this.conversationService.createConversationAllPlayers(game);
         }
@@ -300,6 +303,7 @@ export default class GameCreateService {
         desiredStarCount: number;
     }> {
         const isTutorial = settings.general.type === "tutorial";
+        const isSinglePlayer = settings.general.type === "single_player";
         const isOfficialGame = !userId;
         const isCustomGalaxy = settings.galaxy.galaxyType === "custom";
         const isAdvancedCustomGalaxy =
@@ -318,10 +322,23 @@ export default class GameCreateService {
         if (!isOfficialGame) {
             if (isTutorial) {
                 settings.general.type = "tutorial";
+            } else if (isSinglePlayer) {
+                // Single player games start immediately against AI, so there are no
+                // open game limits to enforce and nobody else can join.
+                settings.general.type = "single_player";
+                settings.general.password = null;
+                settings.general.afkSlotsOpen = "disabled";
+                settings.general.advancedAI = "enabled";
             } else {
                 await this._validateUserCanCreateGame(userId!, settings);
                 settings.general.type = "custom";
             }
+        }
+
+        if (isOfficialGame && isSinglePlayer) {
+            throw new ValidationError(
+                "Single player games must be created by a user.",
+            );
         }
 
         if (settings.general.playerLimit < 2) {
@@ -670,6 +687,22 @@ export default class GameCreateService {
             game.galaxy.players[0],
             game.settings.general.createdByUserId!,
             `Player`,
+            0,
+        );
+        this.gameJoinService.assignNonUserPlayersToAI(game);
+    }
+
+    async _setupSinglePlayerPlayers(game: Game) {
+        // Put the creator into the first slot and hand every other slot to the AI.
+        // Assigning the only human player starts the game straight away.
+        const userId = game.settings.general.createdByUserId!;
+        const user = await this.userService.getById(userId, { username: 1 });
+
+        this.gameJoinService.assignPlayerToUser(
+            game,
+            game.galaxy.players[0],
+            userId,
+            user?.username || "Player",
             0,
         );
         this.gameJoinService.assignNonUserPlayersToAI(game);

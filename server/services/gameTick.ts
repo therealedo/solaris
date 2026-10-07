@@ -810,7 +810,7 @@ export default class GameTickService extends EventEmitter {
     ) {
         // Check to see if anyone has been defeated.
         // A player is defeated if they have no stars and no carriers remaining.
-        const isTutorialGame = this.gameTypeService.isTutorialGame(game);
+        const isSoloGame = this.gameTypeService.isSoloGame(game);
         const undefeatedPlayers = game.galaxy.players.filter(
             (p) => !p.defeated,
         );
@@ -851,7 +851,7 @@ export default class GameTickService extends EventEmitter {
                         game.afkers.push(player.userId);
                     }
 
-                    if (user && !isTutorialGame) {
+                    if (user && !isSoloGame) {
                         this.playerAfkService.incrementAfkCount(user);
                     }
 
@@ -864,7 +864,7 @@ export default class GameTickService extends EventEmitter {
 
                     await eventService.createPlayerAfkEvent(e);
                 } else {
-                    if (user && !isTutorialGame) {
+                    if (user && !isSoloGame) {
                         user.achievements.defeated++;
 
                         if (this.gameTypeService.is1v1Game(game)) {
@@ -896,7 +896,7 @@ export default class GameTickService extends EventEmitter {
         notificationService: INotificationService,
         emailService: IEmailService,
     ) {
-        const isTutorialGame = this.gameTypeService.isTutorialGame(game);
+        const isSoloGame = this.gameTypeService.isSoloGame(game);
 
         // Update the leaderboard state here so we can keep track of positions
         // without having to actually calculate it.
@@ -949,7 +949,7 @@ export default class GameTickService extends EventEmitter {
                 }
             }
 
-            if (!isTutorialGame) {
+            if (!isSoloGame) {
                 let rankingResult: GameRankingResult<DBObjectId> | null = null;
 
                 if (this.gameTypeService.isRankedGame(game)) {

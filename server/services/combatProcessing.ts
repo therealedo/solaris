@@ -233,7 +233,7 @@ export default class CombatProcessingService extends EventEmitter {
             // Distribute damage evenly across all objects that are involved in combat.
             this._distributeDamage(combatResult);
 
-            if (!this.gameTypeService.isTutorialGame(game)) {
+            if (!this.gameTypeService.isSoloGame(game)) {
                 await this._updatePlayersCombatAchievements(
                     game,
                     gameUsers,

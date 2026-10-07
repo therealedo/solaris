@@ -166,7 +166,7 @@ export default class StarUpgradeService extends EventEmitter {
         if (
             player.userId &&
             !player.defeated &&
-            !this.gameTypeService.isTutorialGame(game)
+            !this.gameTypeService.isSoloGame(game)
         ) {
             await statisticsService.modifyStats(
                 game._id,
@@ -216,7 +216,7 @@ export default class StarUpgradeService extends EventEmitter {
         if (
             player.userId &&
             !player.defeated &&
-            !this.gameTypeService.isTutorialGame(game)
+            !this.gameTypeService.isSoloGame(game)
         ) {
             await statisticsService.modifyStats(
                 game._id,
@@ -347,7 +347,7 @@ export default class StarUpgradeService extends EventEmitter {
         if (
             player.userId &&
             !player.defeated &&
-            !this.gameTypeService.isTutorialGame(game)
+            !this.gameTypeService.isSoloGame(game)
         ) {
             await statisticsService.modifyStats(
                 game._id,
@@ -470,7 +470,7 @@ export default class StarUpgradeService extends EventEmitter {
         if (
             player.userId &&
             !player.defeated &&
-            !this.gameTypeService.isTutorialGame(game)
+            !this.gameTypeService.isSoloGame(game)
         ) {
             await statisticsService.modifyStats(
                 game._id,
@@ -944,7 +944,7 @@ export default class StarUpgradeService extends EventEmitter {
         if (
             player.userId &&
             !player.defeated &&
-            !this.gameTypeService.isTutorialGame(game)
+            !this.gameTypeService.isSoloGame(game)
         ) {
             await statisticsService.modifyStats(
                 game._id,
@@ -1001,7 +1001,7 @@ export default class StarUpgradeService extends EventEmitter {
         if (
             player.userId &&
             !player.defeated &&
-            !this.gameTypeService.isTutorialGame(game)
+            !this.gameTypeService.isSoloGame(game)
         ) {
             await statisticsService.modifyStats(
                 game._id,

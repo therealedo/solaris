@@ -7,6 +7,7 @@ import type { CustomGalaxy } from "./customGalaxy";
 
 export const GAME_TYPES = [
     "tutorial",
+    "single_player",
     "custom",
     "standard_rt",
     "standard_tb",

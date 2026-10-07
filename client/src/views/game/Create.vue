@@ -1,12 +1,28 @@
 <template>
   <view-container :is-auth-page="true">
-    <view-title title="Create Game" />
+    <view-title
+      :title="isSinglePlayer ? 'Create Single Player Game' : 'Create Game'"
+    />
     <loading-spinner :loading="!settings || isCreatingGame" />
 
     <select-template @onSelectTemplate="loadSettingsFromTemplate" />
 
     <form @submit.prevent="handleSubmit" v-if="settings">
       <view-collapse-panel title="Game Settings" :startsOpened="true">
+        <div class="mb-2 form-check">
+          <input
+            type="checkbox"
+            class="form-check-input"
+            id="singlePlayer"
+            v-model="isSinglePlayer"
+            :disabled="isCreatingGame"
+          />
+          <label for="singlePlayer" class="form-check-label"
+            >Single player against AI
+            <help-tooltip
+              tooltip="Play alone against AI opponents. Every other slot is filled by an AI and the game starts immediately. Single player games are private and do not count towards rank or achievements."
+          /></label>
+        </div>
         <div class="mb-2">
           <label for="name" class="col-form-label"
             >Name
@@ -37,7 +53,7 @@
             v-model="settings.general.description"
           ></textarea>
         </div>
-        <div class="mb-2">
+        <div class="mb-2" v-if="!isSinglePlayer">
           <label for="password" class="col-form-label"
             >Password
             <help-tooltip
@@ -2559,6 +2575,7 @@ import FluxBar from "./components/menu/FluxBar.vue";
 import router from "../../router";
 import SelectTemplate from "@/views/game/gameCreation/SelectTemplate.vue";
 import { ref, onMounted, inject, type Ref, computed } from "vue";
+import { useRoute } from "vue-router";
 import {
   GAME_CREATION_OPTIONS,
   type GameSettingsSpec,
@@ -2578,7 +2595,10 @@ import { useToast } from "vue-toast-notification";
 const httpClient = inject(httpInjectionKey)!;
 const toast = useToast();
 
+const route = useRoute();
+
 const isCreatingGame = ref(false);
+const isSinglePlayer = ref(route.query.singlePlayer === "true");
 const errors: Ref<string[]> = ref([]);
 const settings: Ref<GameSettingsSpec | null> = ref(null);
 
@@ -2678,13 +2698,22 @@ const handleSubmit = async (e: Event) => {
 
   isCreatingGame.value = true;
 
+  settings.value!.general.type = isSinglePlayer.value
+    ? "single_player"
+    : "custom";
+
+  if (isSinglePlayer.value) {
+    settings.value!.general.password = null;
+  }
+
   const response = await createGame(httpClient)(settings.value!);
 
   if (isOk(response)) {
     toast.success(`The game ${settings.value!.general.name} has been created.`);
 
+    // Single player games start straight away so go directly into the game.
     router.push({
-      name: "game-detail",
+      name: isSinglePlayer.value ? "game" : "game-detail",
       query: { id: response.data.gameId },
     });
   } else {

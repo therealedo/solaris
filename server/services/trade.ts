@@ -175,7 +175,7 @@ export default class TradeService extends EventEmitter {
             eventService,
         );
 
-        if (!this.gameTypeService.isTutorialGame(game)) {
+        if (!this.gameTypeService.isSoloGame(game)) {
             if (fromPlayer.userId && !fromPlayer.defeated) {
                 await statisticsService.modifyStats(
                     game._id,
@@ -332,7 +332,7 @@ export default class TradeService extends EventEmitter {
             eventService,
         );
 
-        if (!this.gameTypeService.isTutorialGame(game)) {
+        if (!this.gameTypeService.isSoloGame(game)) {
             if (fromPlayer.userId && !fromPlayer.defeated) {
                 await statisticsService.modifyStats(
                     game._id,
@@ -481,7 +481,7 @@ export default class TradeService extends EventEmitter {
             },
         );
 
-        if (!this.gameTypeService.isTutorialGame(game)) {
+        if (!this.gameTypeService.isSoloGame(game)) {
             if (fromPlayer.userId) {
                 await this.achievementService.incrementRenownSent(
                     fromPlayer.userId,
@@ -639,7 +639,7 @@ export default class TradeService extends EventEmitter {
             eventService,
         );
 
-        if (!this.gameTypeService.isTutorialGame(game)) {
+        if (!this.gameTypeService.isSoloGame(game)) {
             // Need to assert that the trading players aren't controlled by AI
             // and the player user has an account.
 

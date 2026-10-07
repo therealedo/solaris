@@ -172,7 +172,7 @@ export default class SpecialistHireService {
         if (
             player.userId &&
             !player.defeated &&
-            !this.gameTypeService.isTutorialGame(game)
+            !this.gameTypeService.isSoloGame(game)
         ) {
             await statisticsService.modifyStats(
                 game._id,
@@ -331,7 +331,7 @@ export default class SpecialistHireService {
         if (
             player.userId &&
             !player.defeated &&
-            !this.gameTypeService.isTutorialGame(game)
+            !this.gameTypeService.isSoloGame(game)
         ) {
             await statisticsService.modifyStats(
                 game._id,

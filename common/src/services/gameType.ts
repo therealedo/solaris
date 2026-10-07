@@ -18,6 +18,16 @@ export class GameTypeService {
         return game.settings.general.type === "tutorial";
     }
 
+    isSinglePlayerGame<ID>(game: Game<ID>) {
+        return game.settings.general.type === "single_player";
+    }
+
+    // Games played by a single human against AI only (tutorials and single player games).
+    // These do not count towards achievements, statistics or rank.
+    isSoloGame<ID>(game: Game<ID>) {
+        return this.isTutorialGame(game) || this.isSinglePlayerGame(game);
+    }
+
     isOfficialGame<ID>(game: Game<ID>) {
         return game.settings.general.createdByUserId == null;
     }
@@ -110,7 +120,7 @@ export class GameTypeService {
     isRankedGame<ID>(game: Game<ID>) {
         // Official games are either not user created or featured (featured games can be user created)
         return (
-            !this.isTutorialGame(game) &&
+            !this.isSoloGame(game) &&
             !this.isNewPlayerGame(game) &&
             (!this.isCustomGame(game) || this.isFeaturedGame(game))
         );

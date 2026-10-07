@@ -40,7 +40,9 @@ export default class GameListService {
         const games = await this.gameRepo.find(
             {
                 "state.startDate": { $eq: null },
-                "settings.general.type": { $ne: "tutorial" },
+                "settings.general.type": {
+                    $nin: ["tutorial", "single_player"],
+                },
             },
             {
                 "settings.general.type": 1,
@@ -71,7 +73,9 @@ export default class GameListService {
     async listOfficialGames() {
         const official = await this.gameRepo.find(
             {
-                "settings.general.type": { $nin: ["custom", "tutorial"] },
+                "settings.general.type": {
+                    $nin: ["custom", "tutorial", "single_player"],
+                },
                 "state.startDate": { $eq: null },
             },
             {
@@ -186,7 +190,9 @@ export default class GameListService {
         return await this.gameRepo.find(
             {
                 "state.endDate": { $ne: null }, // Game is finished
-                "settings.general.type": { $ne: "tutorial" },
+                "settings.general.type": {
+                    $nin: ["tutorial", "single_player"],
+                },
             },
             {
                 "settings.general.type": 1,
@@ -205,7 +211,9 @@ export default class GameListService {
         const games = await this.gameRepo.find(
             {
                 "state.endDate": { $ne: null }, // Game is finished
-                "settings.general.type": { $ne: "tutorial" },
+                "settings.general.type": {
+                    $nin: ["tutorial", "single_player"],
+                },
                 $or: [
                     // User was active in the game or has been afk'd
                     { "galaxy.players": { $elemMatch: { userId } } },
@@ -428,7 +436,9 @@ export default class GameListService {
     async listInProgressGames() {
         let games = await this.gameRepo.find(
             {
-                "settings.general.type": { $nin: ["tutorial"] },
+                "settings.general.type": {
+                    $nin: ["tutorial", "single_player"],
+                },
                 "state.startDate": { $ne: null },
                 "state.endDate": { $eq: null },
             },

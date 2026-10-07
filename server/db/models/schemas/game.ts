@@ -34,6 +34,7 @@ const schema = new Schema({
                 required: true,
                 enum: [
                     "tutorial",
+                    "single_player",
                     "custom",
                     "standard_rt",
                     "standard_tb",

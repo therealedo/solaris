@@ -436,7 +436,7 @@ export default class StarService extends EventEmitter {
         if (
             carrierUser &&
             !carrierPlayer.defeated &&
-            !this.gameTypeService.isTutorialGame(game)
+            !this.gameTypeService.isSoloGame(game)
         ) {
             statisticsService.modifyStats(
                 game._id,
