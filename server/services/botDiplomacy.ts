@@ -28,7 +28,11 @@ import {
     isThreat,
 } from "./botDiplomacyPolicy";
 import { logger } from "../utils/logging";
-import { getPersona } from "./botPersonas";
+import {
+    calculateDifficultyCredits,
+    DIFFICULTY_TARGETS,
+} from "./botDifficulty";
+import { getBotPersona } from "./botPersonas";
 import { LlmProvider } from "./llm/types";
 
 const log = logger("Bot Diplomacy Service");
@@ -104,12 +108,23 @@ export default class BotDiplomacyService {
         this.llmProvider = llmProvider;
     }
 
+    // Single player games, and games with several humans where some slots were
+    // given to AI opponents with personas.
     isEnabled(game: Game) {
-        return this.gameTypeService.isSinglePlayerGame(game);
+        return (
+            this.gameTypeService.isSinglePlayerGame(game) ||
+            game.galaxy.players.some((p) => !p.userId && p.aiPersona)
+        );
     }
 
+    // In games with several humans, only the AI opponents act. Players the AI took
+    // over because they went AFK or lost keep quiet.
     listBots(game: Game) {
-        return game.galaxy.players.filter((p) => !p.userId && !p.defeated);
+        const singlePlayer = this.gameTypeService.isSinglePlayerGame(game);
+
+        return game.galaxy.players.filter(
+            (p) => !p.userId && !p.defeated && (singlePlayer || p.aiPersona),
+        );
     }
 
     // Diplomacy changes are made in memory only and persisted when the game is saved
@@ -288,7 +303,7 @@ export default class BotDiplomacyService {
                 allyIsNeighbour: neighbourIds.has(ally._id.toString()),
                 isThreatened,
                 loyalty: bot.aiPersona
-                    ? getPersona(bot.aiPersona.key).loyalty
+                    ? getBotPersona(bot.aiPersona).loyalty
                     : undefined,
             });
 
@@ -483,9 +498,13 @@ export default class BotDiplomacyService {
 
         switch (action) {
             case "ally":
+                // The LLM can be talked into anything, so an alliance must also make
+                // sense by the rules: not with someone the bot distrusts or who is
+                // about to win.
                 if (
                     status.statusTo === "allies" ||
-                    this._isAtAllianceCap(ctx.game, bot)
+                    this._isAtAllianceCap(ctx.game, bot) ||
+                    !this._decideOffer(ctx, bot, target).accept
                 ) {
                     return false;
                 }
@@ -520,6 +539,13 @@ export default class BotDiplomacyService {
                 return true;
             case "makePeace":
                 if (status.statusTo !== "enemies") {
+                    return false;
+                }
+
+                // Never hand a player about to win a break.
+                const peace = this._decideOffer(ctx, bot, target);
+
+                if (!peace.accept && peace.reason === "tooStrong") {
                     return false;
                 }
 
@@ -755,6 +781,54 @@ export default class BotDiplomacyService {
         }
 
         return neighbours;
+    }
+
+    // Called once per production cycle after every player has been paid. Moves each
+    // AI opponent's income towards the strength its difficulty wants relative to the
+    // humans (see botDifficulty.ts).
+    applyDifficulty(game: Game, incomes: Map<string, number>) {
+        const difficulty = game.settings.general.aiDifficulty;
+
+        if (
+            !this.isEnabled(game) ||
+            !DIFFICULTY_TARGETS[difficulty ?? "classic"]
+        ) {
+            return;
+        }
+
+        const strengths = this._calculateStrengths(game);
+        const humans = game.galaxy.players.filter(
+            (p) => p.userId && !p.defeated,
+        );
+
+        if (!humans.length) {
+            return;
+        }
+
+        const averageHumanStrength =
+            humans.reduce(
+                (sum, h) =>
+                    sum + (strengths.get(h._id.toString())?.strength ?? 0),
+                0,
+            ) / humans.length;
+
+        for (const bot of this.listBots(game)) {
+            const id = bot._id.toString();
+            const strength = strengths.get(id);
+
+            if (!strength) {
+                continue;
+            }
+
+            const credits = calculateDifficultyCredits({
+                difficulty,
+                botStrength: strength.strength,
+                averageHumanStrength,
+                income: incomes.get(id) ?? 0,
+            });
+
+            bot.credits = Math.max(0, bot.credits + credits);
+        }
     }
 
     _calculateStrengths(game: Game): Map<string, PlayerStrength> {

@@ -62,7 +62,7 @@ const tryTickGame = async (
 
             // AI personas plan their diplomacy in the background after the tick. It
             // waits for this job's mutex, so it can't overlap the next tick.
-            if (container.gameTypeService.isSinglePlayerGame(game)) {
+            if (container.botBrainService.isEnabled(game)) {
                 container.botBrainService.onGameTicked(
                     gameId,
                     container.eventService,

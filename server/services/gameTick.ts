@@ -732,6 +732,9 @@ export default class GameTickService extends EventEmitter {
         if (hasProductionTicked) {
             game.state.productionTick++;
 
+            // Income per player this cycle, for the AI difficulty adjustment.
+            const incomes = new Map<string, number>();
+
             // For each player, perform the end of cycle actions.
             // Give each player money.
             // Conduct experiments.
@@ -743,6 +746,8 @@ export default class GameTickService extends EventEmitter {
                         game,
                         player,
                     );
+                incomes.set(player._id.toString(), creditsResult.creditsTotal);
+
                 let experimentResult = this.researchService.conductExperiments(
                     game,
                     player,
@@ -795,6 +800,8 @@ export default class GameTickService extends EventEmitter {
                     await notificationService.onPlayerGalacticCycleCompleted(e);
                 }
             }
+
+            this.botDiplomacyService.applyDifficulty(game, incomes);
 
             // Destroy stars for battle royale mode.
             if (game.settings.general.mode === "battleRoyale") {

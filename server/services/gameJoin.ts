@@ -376,11 +376,17 @@ export default class GameJoinService extends EventEmitter {
 
         // If the game hasn't started yet then check if the game is full
         if (!game.state.startDate) {
+            // Slots given to AI opponents when the game was created count as filled.
+            const aiOpponentSlots = game.galaxy.players.filter(
+                (p) => !p.userId && p.aiPersona && !p.isOpenSlot,
+            ).length;
+
             // Start the game if all slots have been filled
             // OR its a new player game, half or more are filled
             // OR its a solo game (tutorial or single player) and a player has joined
             shouldStartGame =
-                game.state.players === game.settings.general.playerLimit ||
+                game.state.players + aiOpponentSlots ===
+                    game.settings.general.playerLimit ||
                 (this.gameTypeService.isNewPlayerGame(game) &&
                     game.state.players >=
                         game.settings.general.playerLimit / 2) ||
@@ -431,15 +437,28 @@ export default class GameJoinService extends EventEmitter {
     assignNonUserPlayersToAI(
         game: Game,
         slotsOpen: boolean | undefined = undefined,
+        // Defaults to every slot without a user, except AI opponents with personas,
+        // which were set up when the game was created.
+        only: Player[] | undefined = undefined,
     ) {
         // For all AI, assign a random alias and an avatar.
-        const players = game.galaxy.players.filter((p) => p.userId == null);
+        const players =
+            only ??
+            game.galaxy.players.filter((p) => p.userId == null && !p.aiPersona);
 
         if (!players.length) {
             return;
         }
 
-        const aliases = this.avatarService.listAllAliases();
+        // Don't reuse a name another player in the game already has.
+        const takenAliases = new Set(
+            game.galaxy.players
+                .filter((p) => !players.includes(p))
+                .map((p) => p.alias),
+        );
+        const aliases = this.avatarService
+            .listAllAliases()
+            .filter((a) => !takenAliases.has(a));
         const avatars = this.avatarService.listAllSolarisAvatars();
 
         for (const player of players) {

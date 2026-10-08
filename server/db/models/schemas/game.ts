@@ -145,6 +145,18 @@ const schema = new Schema({
                 enum: ["disabled", "enabled"],
                 default: "disabled",
             },
+            aiOpponents: {
+                type: Types.Number,
+                required: false,
+                min: 0,
+                default: 0,
+            },
+            aiDifficulty: {
+                type: Types.String,
+                required: false,
+                enum: ["classic", "easy", "normal", "hard", "brutal"],
+                default: "classic",
+            },
             afkSlotsOpen: {
                 type: Types.String,
                 required: false,

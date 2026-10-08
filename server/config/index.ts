@@ -68,6 +68,7 @@ const config: Config = {
             process.env.FRONTEND_APP_PROVIDER_INFORMATION_URL || "",
         appDiscordOAuthUrl: process.env.FRONTEND_APP_DISCORD_OAUTH_URL || "",
     },
+    everyoneEstablished: process.env.EVERYONE_ESTABLISHED == "true",
     llm: {
         // Bots use an LLM for chat and diplomacy only when a key is set.
         geminiApiKey: process.env.GEMINI_API_KEY || undefined,

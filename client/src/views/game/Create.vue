@@ -267,6 +267,53 @@
           </select>
         </div>
 
+        <div class="mb-2" v-if="!isSinglePlayer">
+          <label for="aiOpponents" class="col-form-label"
+            >AI Opponents
+            <help-tooltip
+              tooltip="Slots given to AI opponents with their own personalities. They chat, ally and betray like players. The game starts when humans fill the remaining slots."
+          /></label>
+          <select
+            class="form-select"
+            id="aiOpponents"
+            v-model="settings.general.aiOpponents"
+            :disabled="isCreatingGame"
+          >
+            <option
+              v-for="opt in aiOpponentOptions"
+              v-bind:key="opt"
+              v-bind:value="opt"
+            >
+              {{ opt === 0 ? "None" : `${opt} AI opponents` }}
+            </option>
+          </select>
+        </div>
+
+        <div
+          class="mb-2"
+          v-if="isSinglePlayer || (settings.general.aiOpponents ?? 0) > 0"
+        >
+          <label for="aiDifficulty" class="col-form-label"
+            >AI Difficulty
+            <help-tooltip
+              tooltip="How strong AI opponents play compared to the human players. Bots earn more or fewer credits each cycle to stay at that level, so they keep pace with you instead of using fixed bonuses."
+          /></label>
+          <select
+            class="form-select"
+            id="aiDifficulty"
+            v-model="settings.general.aiDifficulty"
+            :disabled="isCreatingGame"
+          >
+            <option
+              v-for="opt in options.general.aiDifficulty"
+              v-bind:key="opt.value"
+              v-bind:value="opt.value"
+            >
+              {{ opt.text }}
+            </option>
+          </select>
+        </div>
+
         <div class="mb-2">
           <label for="playerType" class="col-form-label"
             >Player Type
@@ -2634,8 +2681,20 @@ const loadSettingsFromTemplate = async (templateName: string) => {
 
   const copy = JSON.parse(JSON.stringify(template)); // deep copy
   delete copy.default; // remove default property added by ES module
-  settings.value = copy;
+  settings.value = withAiDefaults(copy);
 };
+
+// Templates and older defaults don't have the AI settings.
+const withAiDefaults = (s: GameSettingsSpec) => {
+  s.general.aiOpponents ??= 0;
+  s.general.aiDifficulty ??= "normal";
+  return s;
+};
+
+const aiOpponentOptions = computed(() => {
+  const max = Math.max(0, (settings.value?.general.playerLimit ?? 2) - 2);
+  return Array.from({ length: max + 1 }, (_, i) => i);
+});
 
 const validateTeamSettings = () => {
   if (settings.value!.general.mode !== "teamConquest") {
@@ -2704,6 +2763,7 @@ const handleSubmit = async (e: Event) => {
 
   if (isSinglePlayer.value) {
     settings.value!.general.password = null;
+    settings.value!.general.aiOpponents = 0;
   }
 
   const response = await createGame(httpClient)(settings.value!);
@@ -2765,6 +2825,11 @@ const onPlayerLimitChanged = () => {
     settings.value!.diplomacy.lockedAlliances = "disabled";
   }
 
+  settings.value!.general.aiOpponents = Math.min(
+    settings.value!.general.aiOpponents ?? 0,
+    Math.max(0, settings.value!.general.playerLimit - 2),
+  );
+
   onMaxAllianceTriggerChanged();
 };
 
@@ -2776,7 +2841,7 @@ onMounted(async () => {
   const response = await getDefaultSettings(httpClient)();
 
   if (isOk(response)) {
-    settings.value = response.data;
+    settings.value = withAiDefaults(response.data);
   } else {
     console.error(formatError(response));
   }

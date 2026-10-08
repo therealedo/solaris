@@ -47,6 +47,17 @@ export type GamePlayerAnonymity = "normal" | "extra" | "revealAtEnd";
 export type GamePlayerOnlineStatus = "hidden" | "visible";
 export type GameSettingEnabledDisabled = "disabled" | "enabled";
 
+// How strong AI opponents play relative to the human players. "classic" is the
+// original AI with no adjustment.
+export const AI_DIFFICULTIES = [
+    "classic",
+    "easy",
+    "normal",
+    "hard",
+    "brutal",
+] as const;
+export type AiDifficulty = (typeof AI_DIFFICULTIES)[number];
+
 export const GAME_AWARD_RANK_TO = [
     "all",
     "winner",
@@ -306,6 +317,9 @@ export type GameSettingsGeneralBase = {
     readyToQuitTimerCycles?: ReadyToQuitTimerCycles;
     readyToQuitVisibility: ReadyToQuitVisibility;
     joinRandomSlot: GameSettingEnabledDisabled;
+    // Slots taken by AI opponents with personas in a game with several humans.
+    aiOpponents?: number;
+    aiDifficulty?: AiDifficulty;
 };
 
 export type GameSettingsGeneral<ID> = GameSettingsGeneralBase & {

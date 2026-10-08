@@ -83,6 +83,11 @@ back to rules until it resets. The budget is shared by every game on the server,
 each account can have at most 3 single player games in progress. Note that Google may use free tier prompts to improve its
 products, so don't put anything private in chat.
 
+**Difficulty and AI opponents.** The create page's **AI Difficulty** decides how strong
+bots play compared to the humans (Easy, Normal, Hard, Brutal; Classic is the original AI).
+Bots earn more or fewer credits each cycle to stay at that level. In a normal game,
+**AI Opponents** gives some slots to persona bots, and the game starts when humans fill the rest.
+
 **Updating** after new commits: `git pull` and run the same `up -d --build` command.
 
 **Things to know**

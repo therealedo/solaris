@@ -1,4 +1,6 @@
-// Personalities given to AI players in single player games. Each persona drives how a bot
+import { AiPersonaState } from "./types/Ai";
+
+// Personalities given to AI opponents. Each persona drives how a bot
 // talks and schemes when an LLM is available, and tunes the rule based fallback.
 
 export interface BotPersona {
@@ -108,8 +110,55 @@ export const BOT_PERSONAS: BotPersona[] = [
 
 export const DEFAULT_PERSONA = BOT_PERSONAS[3];
 
+// The most a quirk shifts one of a persona's traits.
+const MAX_QUIRK = 0.15;
+
 export function getPersona(key: string | null | undefined): BotPersona {
     return BOT_PERSONAS.find((p) => p.key === key) ?? DEFAULT_PERSONA;
+}
+
+// The bot's persona with its own quirks applied to the traits.
+export function getBotPersona(
+    state: AiPersonaState | null | undefined,
+): BotPersona {
+    const persona = getPersona(state?.key);
+    const quirks = state?.quirks;
+
+    if (!quirks) {
+        return persona;
+    }
+
+    const shift = (value: number, quirk: number) =>
+        Math.min(1, Math.max(0, value + (Number(quirk) || 0)));
+
+    return {
+        ...persona,
+        loyalty: shift(persona.loyalty, quirks.loyalty),
+        aggression: shift(persona.aggression, quirks.aggression),
+        honesty: shift(persona.honesty, quirks.honesty),
+    };
+}
+
+// New persona states for a game's bots: different personas while they last, each
+// with random quirks. random() returns a number in [0, 1).
+export function createPersonaStates(
+    count: number,
+    random: () => number,
+): AiPersonaState[] {
+    const quirk = () => Math.round((random() * 2 - 1) * MAX_QUIRK * 100) / 100;
+
+    return pickPersonaKeys(count, (max) => Math.floor(random() * max)).map(
+        (key) => ({
+            key,
+            notes: [],
+            lastStrategyCycle: 0,
+            quirks: {
+                loyalty: quirk(),
+                aggression: quirk(),
+                honesty: quirk(),
+            },
+        }),
+    );
 }
 
 // Assigns a different persona to each bot while personas remain, then repeats.

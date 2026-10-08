@@ -96,7 +96,7 @@ export default (container: DependencyContainer) => {
                 );
 
                 // AI players answer in the background.
-                if (container.gameTypeService.isSinglePlayerGame(req.game)) {
+                if (container.botBrainService.isEnabled(req.game)) {
                     container.botBrainService.onHumanMessage(
                         req.game._id,
                         req.params.conversationId,

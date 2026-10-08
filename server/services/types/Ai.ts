@@ -31,4 +31,13 @@ export interface AiPersonaState {
     notes: string[];
     // Production cycle of the last LLM strategy turn.
     lastStrategyCycle: number;
+    // Per bot shifts to the persona's traits, so two bots with the same persona
+    // don't behave identically.
+    quirks?: PersonaQuirks;
+}
+
+export interface PersonaQuirks {
+    loyalty: number;
+    aggression: number;
+    honesty: number;
 }

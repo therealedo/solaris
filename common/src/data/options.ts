@@ -68,6 +68,28 @@ export const GAME_CREATION_OPTIONS = {
                 text: "Disabled",
             },
         ],
+        aiDifficulty: [
+            {
+                value: "easy",
+                text: "Easy (bots stay well behind you)",
+            },
+            {
+                value: "normal",
+                text: "Normal (bots keep pace with you)",
+            },
+            {
+                value: "hard",
+                text: "Hard (bots pull ahead of you)",
+            },
+            {
+                value: "brutal",
+                text: "Brutal (bots aim to crush you)",
+            },
+            {
+                value: "classic",
+                text: "Classic (original AI, no adjustment)",
+            },
+        ],
         advancedAI: [
             {
                 value: "enabled",

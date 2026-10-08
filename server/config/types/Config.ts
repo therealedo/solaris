@@ -34,6 +34,9 @@ export interface Config {
         botToken?: string;
     };
     frontend: FrontendConfig;
+    // Self hosted servers: treat every account as an established player, so new
+    // accounts can create games without first finishing one.
+    everyoneEstablished: boolean;
     llm: {
         geminiApiKey?: string;
         geminiModel: string;

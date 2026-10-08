@@ -185,6 +185,7 @@ export default (
         userRepository,
         passwordService,
         sessionService,
+        config.everyoneEstablished,
     );
     const adminService = new AdminService(
         userRepository,

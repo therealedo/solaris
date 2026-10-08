@@ -21,6 +21,7 @@ export default class UserService extends EventEmitter {
         public userRepo: Repository<User>,
         private passwordService: PasswordService,
         private sessionService: SessionService,
+        private everyoneEstablished: boolean = false,
     ) {
         super();
     }
@@ -728,6 +729,10 @@ export default class UserService extends EventEmitter {
     }
 
     async isEstablishedPlayer(userId: DBObjectId) {
+        if (this.everyoneEstablished) {
+            return true;
+        }
+
         let user = await this.userRepo.findById(userId, {
             isEstablishedPlayer: 1,
         });

@@ -1,7 +1,7 @@
 import { MathRandomGen, SeededRandomGen } from "../utils/randomGen";
 
 import { ValidationError } from "@solaris/common";
-import { pickPersonaKeys } from "./botPersonas";
+import { createPersonaStates } from "./botPersonas";
 import { Game } from "./types/Game";
 import UserAchievementService from "./userAchievement";
 import ConversationService from "./conversation";
@@ -273,6 +273,7 @@ export default class GameCreateService {
             await this._setupSinglePlayerPlayers(game);
             this.conversationService.createConversationAllPlayers(game);
         } else {
+            this._setupAiOpponentSlots(game);
             this.conversationService.createConversationAllPlayers(game);
         }
 
@@ -340,6 +341,24 @@ export default class GameCreateService {
                 await this._validateUserCanCreateGame(userId!, settings);
                 settings.general.type = "custom";
             }
+        }
+
+        const isCustomGame = settings.general.type === "custom";
+        const aiOpponents = isCustomGame
+            ? (settings.general.aiOpponents ?? 0)
+            : 0;
+
+        if (aiOpponents > settings.general.playerLimit - 2) {
+            throw new ValidationError(
+                "Leave at least 2 slots for human players, or create a single player game instead.",
+            );
+        }
+
+        settings.general.aiOpponents = aiOpponents;
+
+        if (!isSinglePlayer && !aiOpponents) {
+            // Only AI opponents with personas use the difficulty setting.
+            settings.general.aiDifficulty = "classic";
         }
 
         if (isOfficialGame && isSinglePlayer) {
@@ -729,16 +748,38 @@ export default class GameCreateService {
 
         // Give every AI opponent a personality for diplomacy and chat.
         const bots = game.galaxy.players.filter((p) => !p.userId);
-        const personaKeys = pickPersonaKeys(bots.length, (max) =>
-            Math.floor(Math.random() * max),
-        );
+        const personas = createPersonaStates(bots.length, Math.random);
 
         bots.forEach((bot, i) => {
-            bot.aiPersona = {
-                key: personaKeys[i],
-                notes: [],
-                lastStrategyCycle: 0,
-            };
+            bot.aiPersona = personas[i];
+        });
+    }
+
+    // In a game with several humans, hands random slots to AI opponents with personas
+    // before anyone joins. Those slots stay closed and the game starts once the humans
+    // fill the rest.
+    _setupAiOpponentSlots(game: Game) {
+        const count = game.settings.general.aiOpponents ?? 0;
+
+        if (count <= 0) {
+            return;
+        }
+
+        const slots = [...game.galaxy.players];
+
+        for (let i = slots.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [slots[i], slots[j]] = [slots[j], slots[i]];
+        }
+
+        const bots = slots.slice(0, count);
+        const personas = createPersonaStates(bots.length, Math.random);
+
+        this.gameJoinService.assignNonUserPlayersToAI(game, false, bots);
+
+        bots.forEach((bot, i) => {
+            bot.aiPersona = personas[i];
+            bot.ready = true;
         });
     }
 }

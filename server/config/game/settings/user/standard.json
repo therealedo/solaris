@@ -13,6 +13,8 @@
         "timeMachine": "disabled",
         "fluxEnabled": "enabled",
         "advancedAI": "enabled",
+        "aiOpponents": 0,
+        "aiDifficulty": "normal",
         "spectators": "enabled",
         "afkSlotsOpen": "enabled",
         "readyToQuit": "enabled",
