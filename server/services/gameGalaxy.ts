@@ -837,16 +837,15 @@ export default class GameGalaxyService {
             if (!displayOnlineStatus) {
                 p.lastSeen = null;
                 p.isOnline = null;
-            } else if (
-                !p.userId &&
-                p.aiPersona &&
-                doc.settings.general.aiOnlineHours === "enabled"
-            ) {
-                // AI opponents keep human hours; their status follows them.
+            } else if (!p.userId && p.aiPersona) {
+                // AI opponents keep human hours, or are always online.
                 const now = new Date();
-                p.isOnline =
-                    getPresence(p.aiPersona.schedule, now) === "online";
-                p.lastSeen = lastSeen(p.aiPersona.schedule, now);
+                const schedule =
+                    doc.settings.general.aiOnlineHours === "enabled"
+                        ? p.aiPersona.schedule
+                        : null;
+                p.isOnline = getPresence(schedule, now) === "online";
+                p.lastSeen = lastSeen(schedule, now);
             } else {
                 // Work out whether the player is online.
                 p.isOnline =
