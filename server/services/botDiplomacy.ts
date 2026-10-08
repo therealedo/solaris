@@ -124,7 +124,12 @@ export default class BotDiplomacyService {
         const singlePlayer = this.gameTypeService.isSinglePlayerGame(game);
 
         return game.galaxy.players.filter(
-            (p) => !p.userId && !p.defeated && (singlePlayer || p.aiPersona),
+            (p) =>
+                !p.userId &&
+                !p.defeated &&
+                (singlePlayer || p.aiPersona) &&
+                // A bot that quit leaves its empire to the plain AI.
+                p.aiPersona?.endgame?.mode !== "quit",
         );
     }
 

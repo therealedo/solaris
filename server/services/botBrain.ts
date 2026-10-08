@@ -40,6 +40,23 @@ import {
 } from "./botObservations";
 import { BotPersona, getBotPersona, getPersona } from "./botPersonas";
 import { BotPresence, getPresence, msUntilAwake } from "./botPresence";
+import {
+    DebtStep,
+    TRIBUTE_FRACTION,
+    allianceAnnouncement,
+    coalitionMessage,
+    debtMessage,
+    decideDebt,
+    decideEndgame,
+    decidedLeader,
+    helpMessage,
+    quitMessage,
+    readyToQuitMessage,
+    surrenderBrokenMessage,
+    surrenderMessage,
+    teamPlanMessage,
+    warAnnouncement,
+} from "./botSocial";
 import { LlmProvider, LlmUnavailableError } from "./llm/types";
 import Repository from "./repository";
 import { AiPersonaState } from "./types/Ai";
@@ -98,6 +115,12 @@ const MEMORY_LABELS: Record<MemoryKind, string> = {
 };
 
 export interface BotBrainOptions {
+    // Forgives what a player owes the bot in the game's credit ledger.
+    forgiveDebt?: (
+        ctx: TurnContext,
+        bot: Player,
+        debtor: Player,
+    ) => Promise<void>;
     // Sends credits from a bot to another player, with the game's trade rules.
     sendCredits?: (
         ctx: TurnContext,
@@ -306,6 +329,14 @@ export default class BotBrainService {
                     );
                     continue;
                 }
+            }
+
+            // A beaten bot that has gone quiet ignores half of what it's told.
+            if (
+                bot.aiPersona?.endgame?.mode === "quiet" &&
+                this.random() < 0.5
+            ) {
+                continue;
             }
 
             // In a busy group chat, people let the odd remark go unanswered.
@@ -699,9 +730,15 @@ export default class BotBrainService {
                 const id = bot._id.toString();
                 const persona = bot.aiPersona;
 
-                if (!persona || !needsSaving(bot)) {
+                if (
+                    !persona ||
+                    !needsSaving(bot) ||
+                    this._presence(fresh.game, bot) === "asleep"
+                ) {
                     continue;
                 }
+
+                const newCycle = (persona.feelingsCycle ?? 0) < cycle;
 
                 const patch: Partial<AiPersonaState> = {};
                 const observations = observed.get(id) ?? [];
@@ -751,6 +788,10 @@ export default class BotBrainService {
                                 bot,
                                 entry.decision,
                             );
+
+                            if (bot.aiPersona?.gifted) {
+                                patch.gifted = bot.aiPersona.gifted;
+                            }
                         } catch (e) {
                             log.error(
                                 e,
@@ -787,6 +828,23 @@ export default class BotBrainService {
                     }
                 }
 
+                if (sameCycle) {
+                    bot.aiPersona = { ...persona, ...patch };
+
+                    try {
+                        await this._playSocialTurn(
+                            fresh,
+                            bot,
+                            patch,
+                            observations,
+                            Boolean(entry?.decision),
+                            newCycle,
+                        );
+                    } catch (e) {
+                        log.error(e, `Bot ${bot.alias} failed its social turn`);
+                    }
+                }
+
                 await this._savePersona(fresh.game, bot, patch, persona);
             }
         });
@@ -797,6 +855,567 @@ export default class BotBrainService {
             log.info(
                 `Game ${gameId} is locked, bots will look again after the next tick`,
             );
+        }
+    }
+
+    // What a bot does around the fighting, as people do in real games (see
+    // botSocial.ts). `spoke` is whether the LLM planned for the bot this tick, in which
+    // case the rule based messages that would repeat its plan are left out.
+    async _playSocialTurn(
+        ctx: TurnContext,
+        bot: Player,
+        patch: Partial<AiPersonaState>,
+        observations: Observation[],
+        spoke: boolean,
+        newCycle: boolean,
+    ) {
+        const set = (changes: Partial<AiPersonaState>) => {
+            Object.assign(patch, changes);
+            bot.aiPersona = { ...bot.aiPersona!, ...changes };
+        };
+
+        await this._playEndgame(ctx, bot, observations, newCycle, set);
+
+        if (bot.aiPersona?.endgame?.mode === "quit") {
+            return;
+        }
+
+        if (!spoke) {
+            await this._rallyAgainstLeader(ctx, bot, observations, set);
+        }
+
+        if (newCycle) {
+            await this._voteToQuit(ctx, bot, set);
+            await this._chaseDebts(ctx, bot, set);
+        }
+
+        await this._talkToTeam(ctx, bot, observations, spoke, newCycle, set);
+    }
+
+    async _playEndgame(
+        ctx: TurnContext,
+        bot: Player,
+        observations: Observation[],
+        newCycle: boolean,
+        set: (changes: Partial<AiPersonaState>) => void,
+    ) {
+        const state = bot.aiPersona!;
+        const cycle = ctx.game.state.productionTick;
+        const endgame = state.endgame;
+
+        if (endgame?.mode === "surrendered" && endgame.playerId) {
+            const overlord = this.botDiplomacyService.getPlayer(
+                ctx.game,
+                endgame.playerId,
+            );
+
+            if (!overlord || overlord.defeated) {
+                set({ endgame: { mode: "quiet", cycle } });
+                return;
+            }
+
+            // Attacked anyway: the deal is off.
+            if (
+                observations.some(
+                    (o) =>
+                        o.kind === "starLost" &&
+                        o.playerId === endgame.playerId,
+                )
+            ) {
+                const convo =
+                    await this.botDiplomacyService.getOrCreateDirectConversation(
+                        ctx,
+                        bot,
+                        overlord,
+                    );
+                await this.botDiplomacyService.send(
+                    ctx,
+                    bot,
+                    convo,
+                    surrenderBrokenMessage(this.random),
+                );
+                set({
+                    endgame: { mode: "quiet", cycle },
+                    notes: appendNotes(state, [
+                        `${overlord.alias} attacked you after you surrendered and paid tribute.`,
+                    ]),
+                });
+                return;
+            }
+
+            if (newCycle) {
+                await this._sendCredits(
+                    ctx,
+                    bot,
+                    overlord,
+                    Math.floor((bot.credits ?? 0) * TRIBUTE_FRACTION),
+                );
+                set({ gifted: bot.aiPersona!.gifted });
+            }
+
+            if (state.focusPlayerId === endgame.playerId) {
+                set({ focusPlayerId: null });
+            }
+
+            return;
+        }
+
+        if (
+            endgame ||
+            !newCycle ||
+            cycle < 2 ||
+            !this._isLosingBadly(ctx, bot)
+        ) {
+            return;
+        }
+
+        const mode = decideEndgame(
+            getBotPersona(state),
+            state.agenda?.key,
+            this.random,
+        );
+
+        if (mode === "quiet") {
+            set({ endgame: { mode, cycle } });
+        } else if (mode === "quit") {
+            await this._sendGlobal(ctx, bot, quitMessage(this.random));
+            set({ endgame: { mode, cycle } });
+        } else if (mode === "surrendered") {
+            const overlord = this._pickOverlord(ctx, bot);
+
+            if (!overlord) {
+                return;
+            }
+
+            const tribute = Math.max(
+                1,
+                Math.floor((bot.credits ?? 0) * TRIBUTE_FRACTION),
+            );
+            const convo =
+                await this.botDiplomacyService.getOrCreateDirectConversation(
+                    ctx,
+                    bot,
+                    overlord,
+                );
+
+            await this.botDiplomacyService.send(
+                ctx,
+                bot,
+                convo,
+                surrenderMessage(overlord.alias, tribute, this.random),
+            );
+
+            if (this.botDiplomacyService.canDoDiplomacy(ctx.game)) {
+                await this.botDiplomacyService._declareAlly(ctx, bot, overlord);
+            }
+
+            set({
+                endgame: {
+                    mode,
+                    playerId: overlord._id.toString(),
+                    cycle,
+                },
+                focusPlayerId:
+                    state.focusPlayerId === overlord._id.toString()
+                        ? null
+                        : state.focusPlayerId,
+            });
+        }
+    }
+
+    // Who a beaten bot surrenders to: the empire it is angriest with, which is
+    // usually the one beating it, or else the leader.
+    _pickOverlord(ctx: TurnContext, bot: Player): Player | null {
+        const others = this.botDiplomacyService
+            ._listOtherPlayers(ctx.game, bot)
+            .filter((p) => !p.defeated);
+        const feelings = bot.aiPersona?.feelings ?? {};
+        const angriest = others
+            .filter((p) => (feelings[p._id.toString()]?.anger ?? 0) > 0)
+            .sort(
+                (a, b) =>
+                    (feelings[b._id.toString()]?.anger ?? 0) -
+                    (feelings[a._id.toString()]?.anger ?? 0),
+            )[0];
+
+        return (
+            angriest ??
+            others.find((p) => p._id.toString() === ctx.leader.playerId) ??
+            null
+        );
+    }
+
+    // When someone gets close to winning, a bot may call on everyone to stop them,
+    // turn its fleets on them and look for allies.
+    async _rallyAgainstLeader(
+        ctx: TurnContext,
+        bot: Player,
+        observations: Observation[],
+        set: (changes: Partial<AiPersonaState>) => void,
+    ) {
+        if (this.botDiplomacyService.diplomacyService.isTeamGame(ctx.game)) {
+            return;
+        }
+
+        const state = bot.aiPersona!;
+        const calledOut = state.calledOut ?? [];
+        const leaderId = observations.find(
+            (o) =>
+                o.kind === "nearVictory" &&
+                o.playerId !== bot._id.toString() &&
+                !calledOut.includes(o.playerId) &&
+                state.endgame?.playerId !== o.playerId,
+        )?.playerId;
+        const leader = leaderId
+            ? this.botDiplomacyService.getPlayer(ctx.game, leaderId)
+            : null;
+
+        if (!leader || this.random() >= 0.6) {
+            return;
+        }
+
+        const stars = ctx.strengths.get(leaderId!)?.stars ?? 0;
+
+        await this._sendGlobal(
+            ctx,
+            bot,
+            coalitionMessage(
+                leader.alias,
+                stars,
+                ctx.starsForVictory,
+                this.random,
+            ),
+        );
+
+        set({
+            calledOut: [...calledOut, leaderId!],
+            focusPlayerId: leaderId!,
+        });
+
+        // Look for a partner among the others: the strongest one not at war with it.
+        const partner = this.botDiplomacyService
+            ._listOtherPlayers(ctx.game, bot)
+            .filter(
+                (p) =>
+                    !p.defeated &&
+                    p._id.toString() !== leaderId &&
+                    this.botDiplomacyService.diplomacyService.getDiplomaticStatusToPlayer(
+                        ctx.game,
+                        bot._id,
+                        p._id,
+                    ).actualStatus !== "enemies",
+            )
+            .sort(
+                (a, b) =>
+                    (ctx.strengths.get(b._id.toString())?.strength ?? 0) -
+                    (ctx.strengths.get(a._id.toString())?.strength ?? 0),
+            )[0];
+
+        if (partner) {
+            await this.botDiplomacyService.applyAction(
+                ctx,
+                bot,
+                partner,
+                "ally",
+            );
+        }
+    }
+
+    // When the result is clear, bots vote to end the game, as players do in long games.
+    async _voteToQuit(
+        ctx: TurnContext,
+        bot: Player,
+        set: (changes: Partial<AiPersonaState>) => void,
+    ) {
+        const game = ctx.game;
+
+        if (
+            bot.aiPersona?.votedToQuit ||
+            bot.readyToQuit ||
+            game.settings.general.readyToQuit === "disabled" ||
+            game.state.productionTick <= 0
+        ) {
+            return;
+        }
+
+        const leaderId = decidedLeader(
+            [...ctx.strengths.values()],
+            ctx.starsForVictory,
+        );
+
+        if (!leaderId || this.random() >= 0.5) {
+            return;
+        }
+
+        const isLeader = leaderId === bot._id.toString();
+        const leader = this.botDiplomacyService.getPlayer(game, leaderId);
+
+        bot.readyToQuit = true;
+        await this.gameRepo.updateOne(
+            { _id: game._id },
+            { $set: { "galaxy.players.$[p].readyToQuit": true } },
+            { arrayFilters: [{ "p._id": bot._id }] },
+        );
+        await this._sendGlobal(
+            ctx,
+            bot,
+            readyToQuitMessage(
+                isLeader ? null : (leader?.alias ?? null),
+                this.random,
+            ),
+        );
+        set({ votedToQuit: true });
+    }
+
+    // Credits other players owe the bot in the game's ledger, less what it gave away.
+    _owedToBot(bot: Player): Map<string, number> {
+        const owed = new Map<string, number>();
+        const gifted = bot.aiPersona?.gifted ?? {};
+
+        for (const entry of bot.ledger?.credits ?? []) {
+            const id = entry.playerId.toString();
+            owed.set(id, Math.floor(entry.debt - (gifted[id] ?? 0)));
+        }
+
+        return owed;
+    }
+
+    async _chaseDebts(
+        ctx: TurnContext,
+        bot: Player,
+        set: (changes: Partial<AiPersonaState>) => void,
+    ) {
+        const state = bot.aiPersona!;
+        const cycle = ctx.game.state.productionTick;
+        const owed = this._owedToBot(bot);
+        const debts = { ...(state.debts ?? {}) };
+        const gifted = { ...(state.gifted ?? {}) };
+        const feelings = { ...(state.feelings ?? {}) };
+        const notes: string[] = [];
+        let messages = 0;
+
+        for (const player of this.botDiplomacyService._listOtherPlayers(
+            ctx.game,
+            bot,
+        )) {
+            const id = player._id.toString();
+            const amount = owed.get(id) ?? 0;
+            const allied =
+                this.botDiplomacyService.diplomacyService.getDiplomaticStatusToPlayer(
+                    ctx.game,
+                    bot._id,
+                    player._id,
+                ).actualStatus === "allies";
+            const step: DebtStep = player.defeated
+                ? { kind: "none" }
+                : decideDebt({
+                      owed: amount,
+                      record: debts[id],
+                      cycle,
+                      allied,
+                      feeling: feelings[id],
+                      loyalty: getBotPersona(state).loyalty,
+                  });
+
+            if (step.kind === "none" || messages >= 2) {
+                continue;
+            }
+
+            if (step.kind === "forgive") {
+                if (!this.options.forgiveDebt) {
+                    continue;
+                }
+
+                try {
+                    await this.options.forgiveDebt(ctx, bot, player);
+                } catch (e) {
+                    log.info(
+                        `${bot.alias} could not forgive ${player.alias}'s debt: ${(e as Error).message}`,
+                    );
+                    continue;
+                }
+
+                delete debts[id];
+                delete gifted[id];
+            } else if (step.kind === "ask") {
+                debts[id] = {
+                    amount,
+                    asked: step.reminder,
+                    lastAskedCycle: cycle,
+                };
+            } else if (step.kind === "grudge") {
+                const f = feelings[id] ?? { trust: 0, anger: 0 };
+                feelings[id] = {
+                    trust: Math.max(
+                        -1,
+                        Math.round((f.trust - 0.3) * 100) / 100,
+                    ),
+                    anger: Math.min(1, Math.round((f.anger + 0.3) * 100) / 100),
+                };
+                debts[id] = { ...debts[id], asked: 99, lastAskedCycle: cycle };
+                notes.push(
+                    `${player.alias} never repaid the ${amount} credits they owe you.`,
+                );
+            } else if (step.kind === "paid") {
+                const f = feelings[id] ?? { trust: 0, anger: 0 };
+                feelings[id] = {
+                    trust: Math.min(
+                        1,
+                        Math.round((f.trust + 0.15) * 100) / 100,
+                    ),
+                    anger: Math.max(0, Math.round((f.anger - 0.1) * 100) / 100),
+                };
+                delete debts[id];
+            }
+
+            const convo =
+                await this.botDiplomacyService.getOrCreateDirectConversation(
+                    ctx,
+                    bot,
+                    player,
+                );
+            await this.botDiplomacyService.send(
+                ctx,
+                bot,
+                convo,
+                debtMessage(
+                    step,
+                    player.alias,
+                    step.kind === "paid" ? 0 : amount,
+                    this.random,
+                ),
+            );
+            messages++;
+        }
+
+        set({
+            debts,
+            gifted,
+            feelings,
+            ...(notes.length ? { notes: appendNotes(state, notes) } : {}),
+        });
+    }
+
+    // Team games: bot teammates call for help and share what they're doing.
+    async _talkToTeam(
+        ctx: TurnContext,
+        bot: Player,
+        observations: Observation[],
+        spoke: boolean,
+        newCycle: boolean,
+        set: (changes: Partial<AiPersonaState>) => void,
+    ) {
+        const team = this._getTeam(ctx.game, bot);
+
+        if (!team) {
+            return;
+        }
+
+        const tick = ctx.game.state.tick;
+        const lastPost = bot.aiPersona?.lastTeamPostTick ?? -Infinity;
+        const teamIds = new Set(team.players.map((p) => p.toString()));
+        const attack = observations.find(
+            (o) =>
+                (o.kind === "homeStarThreatened" ||
+                    o.kind === "starLost" ||
+                    o.kind === "attackIncoming") &&
+                o.playerId &&
+                !teamIds.has(o.playerId),
+        );
+        let message = "";
+
+        if (attack && tick - lastPost >= 3) {
+            const attacker =
+                this.botDiplomacyService.getPlayer(ctx.game, attack.playerId)
+                    ?.alias ?? "Someone";
+            const star =
+                attack.text.match(
+                    /(?:star|home star) ([^,.]+?)(?:,|\.|$)/,
+                )?.[1] ?? "my stars";
+
+            message = helpMessage(
+                attacker,
+                star,
+                attack.kind === "homeStarThreatened",
+                this.random,
+            );
+        } else if (
+            newCycle &&
+            !spoke &&
+            tick - lastPost >= 2 &&
+            this.random() < 0.4
+        ) {
+            const focusId = bot.aiPersona?.focusPlayerId;
+            const focus = focusId
+                ? (this.botDiplomacyService.getPlayer(ctx.game, focusId)
+                      ?.alias ?? null)
+                : null;
+
+            message = teamPlanMessage(focus, this.random);
+        }
+
+        if (!message) {
+            return;
+        }
+
+        const convo = await this._getTeamConversation(ctx, bot);
+
+        if (convo) {
+            await this.botDiplomacyService.send(ctx, bot, convo, message);
+            set({ lastTeamPostTick: tick });
+        }
+    }
+
+    _getTeam(game: Game, bot: Player) {
+        if (!this.botDiplomacyService.diplomacyService.isTeamGame(game)) {
+            return null;
+        }
+
+        const team = game.galaxy.teams?.find((t) =>
+            t.players.some((p) => p.toString() === bot._id.toString()),
+        );
+
+        return team && team.players.length > 1 ? team : null;
+    }
+
+    // The team's own chat, made by the first teammate that needs it.
+    async _getTeamConversation(ctx: TurnContext, bot: Player) {
+        const team = this._getTeam(ctx.game, bot);
+
+        if (!team) {
+            return null;
+        }
+
+        const ids = new Set(team.players.map((p) => p.toString()));
+        const existing = ctx.conversations.find(
+            (c) =>
+                c.participants.length === ids.size &&
+                c.participants.every((p) => ids.has(p.toString())),
+        );
+
+        if (existing) {
+            return existing;
+        }
+
+        const convo = await this.botDiplomacyService.conversationService.create(
+            ctx.game,
+            bot._id,
+            `Team ${team.name}`.substring(0, 100),
+            team.players.filter((p) => p.toString() !== bot._id.toString()),
+            ctx.eventService,
+        );
+
+        ctx.conversations.push(convo);
+        return convo;
+    }
+
+    async _sendGlobal(ctx: TurnContext, bot: Player, message: string) {
+        const globalChat = ctx.game.conversations.find(
+            (c) => c.createdBy == null,
+        );
+
+        if (globalChat) {
+            await this.botDiplomacyService.send(ctx, bot, globalChat, message);
         }
     }
 
@@ -989,12 +1608,44 @@ export default class BotBrainService {
                 continue;
             }
 
-            await this.botDiplomacyService.applyAction(
+            const changed = await this.botDiplomacyService.applyAction(
                 ctx,
                 bot,
                 targetPlayer,
                 action,
             );
+
+            // Now and then a bot tells the whole galaxy, as players like to.
+            const speaksPublicly = decision.messages.some(
+                (m) => m.to.trim().toLowerCase() === "everyone",
+            );
+
+            if (changed && !speaksPublicly && this.random() < 0.3) {
+                const status =
+                    this.botDiplomacyService.diplomacyService.getDiplomaticStatusToPlayer(
+                        ctx.game,
+                        bot._id,
+                        targetPlayer._id,
+                    ).actualStatus;
+                const announcement =
+                    action === "declareWar"
+                        ? warAnnouncement(
+                              bot.alias,
+                              targetPlayer.alias,
+                              this.random,
+                          )
+                        : action === "ally" && status === "allies"
+                          ? allianceAnnouncement(
+                                bot.alias,
+                                targetPlayer.alias,
+                                this.random,
+                            )
+                          : "";
+
+                if (announcement) {
+                    await this._sendGlobal(ctx, bot, announcement);
+                }
+            }
         }
 
         for (const { to, text } of decision.messages.slice(
@@ -1004,6 +1655,21 @@ export default class BotBrainService {
             const message = sanitizeMessage(text);
 
             if (!message) {
+                continue;
+            }
+
+            if (to.trim().toLowerCase() === "team") {
+                const teamChat = await this._getTeamConversation(ctx, bot);
+
+                if (teamChat) {
+                    await this.botDiplomacyService.send(
+                        ctx,
+                        bot,
+                        teamChat,
+                        message,
+                    );
+                }
+
                 continue;
             }
 
@@ -1056,6 +1722,15 @@ export default class BotBrainService {
 
         try {
             await this.options.sendCredits(ctx, bot, target, amount);
+
+            // Given away on purpose, so the bot won't ask for it back.
+            const id = target._id.toString();
+            const gifted = { ...(bot.aiPersona?.gifted ?? {}) };
+            gifted[id] = (gifted[id] ?? 0) + amount;
+
+            if (bot.aiPersona) {
+                bot.aiPersona = { ...bot.aiPersona, gifted };
+            }
         } catch (e) {
             // Trading may be disabled or restricted in this game.
             log.info(
@@ -1077,7 +1752,11 @@ export default class BotBrainService {
             }
 
             const bots = game.galaxy.players.filter(
-                (p) => !p.userId && p.aiPersona && !p.aiPersona.debriefed,
+                (p) =>
+                    !p.userId &&
+                    p.aiPersona &&
+                    !p.aiPersona.debriefed &&
+                    p.aiPersona.endgame?.mode !== "quit",
             );
             const globalChat = game.conversations.find(
                 (c) => c.createdBy == null,
@@ -1322,6 +2001,7 @@ export default class BotBrainService {
             "Decide who to ally with, who to betray or attack, who to make peace with, which empire your fleets should go after first, and what to say.",
             "You can answer messages from other empires (other AI commanders included), offer or demand credits as tribute, bribe one empire to attack another, and pay what you promised with sendCredits. Recent events show whether others paid you.",
             "Act like a real player with your persona: scheme, build coalitions against the leader, keep or break promises according to your traits and feelings.",
+            "Players often announce alliances, wars and coalitions against the leader in global chat (to: 'everyone'), so others can see and pick sides. Do that when it helps you.",
             this._isLosingBadly(ctx, bot)
                 ? "You are losing badly: say little, and only what helps you survive."
                 : "",
@@ -1438,6 +2118,52 @@ export default class BotBrainService {
 
             lines.push(
                 `- ${other.alias}: ${strength?.stars ?? 0} stars, ${strength?.ships ?? 0} ships, ${comparison}${neighbourIds.has(otherId) ? ", borders you" : ""}. Relationship: ${status.actualStatus}.${offers}${feeling ? ` You feel ${feeling}.` : ""}${focusId === otherId ? " Your fleets are going after them first." : ""}`,
+            );
+        }
+
+        const team = this._getTeam(game, bot);
+
+        if (team) {
+            const mates = team.players
+                .filter((p) => p.toString() !== bot._id.toString())
+                .map((p) =>
+                    this.botDiplomacyService.getPlayer(game, p.toString()),
+                )
+                .filter((p): p is Player => !!p)
+                .map((p) => p.alias);
+
+            lines.push(
+                `Your team: ${mates.join(", ")}. Teammates are permanent allies and win or lose with you. Coordinate with them in team chat (to: "team"): call for help, share targets, help when they ask.`,
+            );
+        }
+
+        const owed = this._owedToBot(bot);
+
+        for (const [id, amount] of owed) {
+            const other = this.botDiplomacyService.getPlayer(game, id);
+
+            if (!other || other.defeated || Math.abs(amount) < 1) {
+                continue;
+            }
+
+            const asked = bot.aiPersona?.debts?.[id]?.asked ?? 0;
+
+            lines.push(
+                amount > 0
+                    ? `Ledger: ${other.alias} owes you ${amount} credits${asked ? ` (you have asked for them${asked > 2 ? " and gave up" : ""})` : ""}.`
+                    : `Ledger: you owe ${other.alias} ${-amount} credits.`,
+            );
+        }
+
+        const endgame = bot.aiPersona?.endgame;
+
+        if (endgame?.mode === "surrendered" && endgame.playerId) {
+            lines.push(
+                `You surrendered to ${this.botDiplomacyService.getPlayer(game, endgame.playerId)?.alias ?? "a stronger empire"} and pay them tribute each cycle. Don't attack them.`,
+            );
+        } else if (endgame?.mode === "quiet") {
+            lines.push(
+                "You are beaten and have gone quiet: you say very little.",
             );
         }
 

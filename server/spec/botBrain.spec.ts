@@ -28,6 +28,8 @@ describe("botBrain", () => {
     let creditsSent: { from: string; to: string; amount: number }[];
     let reviewReplies: boolean;
     let randomValue: number;
+    let nowValue: Date;
+    let forgiven: string[];
 
     const fakeEventService: any = {
         createPlayerDiplomacyStatusChanged: async () => {},
@@ -136,6 +138,10 @@ describe("botBrain", () => {
             },
             {
                 random: () => randomValue,
+                now: () => nowValue,
+                forgiveDebt: async (ctx, from, debtor) => {
+                    forgiven.push(debtor._id as any);
+                },
                 reviewReplies,
                 sendCredits: async (ctx, from, to, amount) => {
                     creditsSent.push({
@@ -210,6 +216,8 @@ describe("botBrain", () => {
         creditsSent = [];
         reviewReplies = false;
         randomValue = 0.5;
+        nowValue = new Date("2026-10-08T12:00:00Z");
+        forgiven = [];
     });
 
     const status = () =>
@@ -1049,6 +1057,188 @@ describe("botBrain", () => {
             );
 
             expect(sent.length).toBe(0);
+        });
+    });
+
+    describe("playing like a person", () => {
+        // Asleep from 10:00 to 18:00 UTC.
+        const sleepyBot = () => {
+            game.settings.general.aiOnlineHours = "enabled";
+            bot.aiPersona.schedule = {
+                utcOffset: 0,
+                sleepStart: 10,
+                sleepHours: 8,
+                busyStart: 20,
+                busyHours: 0,
+            };
+        };
+
+        it("should answer a sleeping bot's messages when it wakes up", async () => {
+            brain = createBrain(false);
+            sleepyBot();
+            const later = spyOn(brain, "_replyLater");
+
+            await brain.replyToConversation(
+                GAME_ID,
+                DM_ID,
+                fakeEventService,
+                {} as any,
+            );
+
+            expect(sent.length).toBe(0);
+            expect(later).toHaveBeenCalled();
+            // Six hours until 18:00, plus a few minutes to check the chat.
+            expect(later.calls.mostRecent().args[3]).toBeGreaterThan(
+                6 * 60 * 60 * 1000,
+            );
+        });
+
+        it("should answer straight away when bots keep no hours", async () => {
+            brain = createBrain(false);
+            sleepyBot();
+            game.settings.general.aiOnlineHours = "disabled";
+
+            await brain.replyToConversation(
+                GAME_ID,
+                DM_ID,
+                fakeEventService,
+                {} as any,
+            );
+
+            expect(sent.length).toBe(1);
+        });
+
+        it("should not plan while asleep", async () => {
+            brain = createBrain(true);
+            sleepyBot();
+
+            await brain.playStrategyTurns(GAME_ID, fakeEventService, {} as any);
+
+            expect(llmRequests.length).toBe(0);
+        });
+
+        it("should leave a bot that quit to the plain AI", () => {
+            brain = createBrain(false);
+            bot.aiPersona.endgame = { mode: "quit", cycle: 1 };
+
+            expect(brain.botDiplomacyService.listBots(game)).toEqual([]);
+        });
+
+        const context = () =>
+            brain.botDiplomacyService.createContext(
+                game,
+                fakeEventService,
+                {} as any,
+                true,
+            )!;
+        const setter = () => (changes: any) => {
+            bot.aiPersona = { ...bot.aiPersona, ...changes };
+        };
+
+        it("should ask for a debt back, then hold a grudge", async () => {
+            brain = createBrain(false);
+            bot.ledger = { credits: [{ playerId: "human", debt: 120 }] };
+
+            await brain._chaseDebts(context(), bot, setter());
+
+            expect(sent[0].message).toContain("owe me 120 credits");
+            expect(bot.aiPersona.debts.human.asked).toBe(1);
+
+            game.state.productionTick = 3;
+            await brain._chaseDebts(context(), bot, setter());
+            game.state.productionTick = 5;
+            await brain._chaseDebts(context(), bot, setter());
+
+            expect(sent.length).toBe(3);
+            expect(sent[2].message).toContain("won't forget");
+            expect(bot.aiPersona.feelings.human.anger).toBeGreaterThan(0);
+        });
+
+        it("should not ask for credits it gave away", async () => {
+            brain = createBrain(false);
+            bot.ledger = { credits: [{ playerId: "human", debt: 120 }] };
+            bot.aiPersona.gifted = { human: 100 };
+
+            await brain._chaseDebts(context(), bot, setter());
+
+            expect(sent.length).toBe(0);
+        });
+
+        it("should forgive a trusted ally's debt", async () => {
+            brain = createBrain(false);
+            bot.aiPersona.key = "honourable_admiral";
+            bot.aiPersona.feelings = { human: { trust: 0.5, anger: 0 } };
+            bot.ledger = { credits: [{ playerId: "human", debt: 120 }] };
+            await diplomacyService.declareAlly(
+                fakeEventService,
+                game,
+                bot._id,
+                human._id,
+                false,
+            );
+            await diplomacyService.declareAlly(
+                fakeEventService,
+                game,
+                human._id,
+                bot._id,
+                false,
+            );
+
+            await brain._chaseDebts(context(), bot, setter());
+
+            expect(forgiven).toEqual(["human"]);
+            expect(sent[0].message).toContain("allies");
+        });
+
+        it("should vote to end a decided game", async () => {
+            brain = createBrain(false);
+            game.settings.general.readyToQuit = "enabled";
+            game.state.starsForVictory = 10;
+            const ctx = context();
+            ctx.strengths.set("human", {
+                playerId: "human",
+                stars: 10,
+                ships: 500,
+                strength: 600,
+            });
+            ctx.strengths.set("bot", {
+                playerId: "bot",
+                stars: 1,
+                ships: 10,
+                strength: 20,
+            });
+            randomValue = 0.1;
+
+            await brain._voteToQuit(ctx, bot, setter());
+
+            expect(bot.readyToQuit).toBeTrue();
+            expect(bot.aiPersona.votedToQuit).toBeTrue();
+            expect(sent[0].message).toContain("Hero");
+        });
+
+        it("should surrender to the empire beating it and pay tribute", async () => {
+            brain = createBrain(false);
+            bot.credits = 200;
+            bot.aiPersona.feelings = { human: { trust: -0.5, anger: 0.8 } };
+            spyOn(brain, "_isLosingBadly").and.returnValue(true);
+            game.state.productionTick = 3;
+            // Rolls under the give up chance, then lands on surrendering.
+            const rolls = [0.1, 0.6];
+            brain.random = () => rolls.shift() ?? 0.5;
+
+            await brain._playEndgame(context(), bot, [], true, setter());
+
+            expect(bot.aiPersona.endgame.mode).toBe("surrendered");
+            expect(bot.aiPersona.endgame.playerId).toBe("human");
+            expect(sent[0].message).toContain("surrender");
+
+            game.state.productionTick = 4;
+            await brain._playEndgame(context(), bot, [], true, setter());
+
+            expect(creditsSent).toEqual([
+                { from: "bot", to: "human", amount: 20 },
+            ]);
+            expect(bot.aiPersona.gifted.human).toBe(20);
         });
     });
 });

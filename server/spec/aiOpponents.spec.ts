@@ -98,4 +98,28 @@ describe("AI opponents in games with several humans", () => {
 
         expect(humans().length).toBe(4);
     });
+
+    it("should use the creator's picks for the bots, then forget them", () => {
+        game.settings.general.aiOpponentChoices =
+            createService._validateAiOpponentChoices([
+                { persona: "warlord", alias: "  Darth  Vex ", avatar: 3 },
+                { persona: "random", alias: "", avatar: 99 },
+            ]);
+
+        createService._setupAiOpponentSlots(game);
+
+        const bots = game.galaxy.players.filter((p) => p.aiPersona);
+        const warlord = bots.find((b) => b.aiPersona.key === "warlord");
+
+        expect(warlord.alias).toBe("Darth Vex");
+        expect(warlord.avatar).toBe("3");
+        expect(bots.some((b) => b.aiPersona.key === "random")).toBeTrue();
+        expect(game.settings.general.aiOpponentChoices).toBeUndefined();
+    });
+
+    it("should refuse names that are too short", () => {
+        expect(() =>
+            createService._validateAiOpponentChoices([{ alias: "X" }]),
+        ).toThrow();
+    });
 });

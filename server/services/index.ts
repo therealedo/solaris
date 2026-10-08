@@ -34,7 +34,7 @@ import GameCreateService from "./gameCreate";
 import GameGalaxyService from "./gameGalaxy";
 import GameListService from "./gameList";
 import GameTickService from "./gameTick";
-import { GameTypeService } from "@solaris/common";
+import { GameTypeService, LedgerType } from "@solaris/common";
 import GameStateService from "./gameState";
 import BattleRoyaleService from "./battleRoyale";
 import MapService from "./map";
@@ -804,6 +804,15 @@ export default (
                     ctx.eventService,
                     statisticsService,
                     ctx.notificationService,
+                );
+            },
+            forgiveDebt: async (ctx, bot, debtor) => {
+                await ledgerService.forgiveDebt(
+                    ctx.game,
+                    bot,
+                    debtor._id,
+                    LedgerType.Credits,
+                    ctx.eventService,
                 );
             },
             reviewReplies: config.llm.reviewReplies,

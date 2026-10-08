@@ -119,7 +119,7 @@ export const STRATEGY_SCHEMA: LlmSchema = {
                     to: {
                         type: "string",
                         description:
-                            "Exact name of the empire to message privately, or 'everyone' for the global chat.",
+                            "Exact name of the empire to message privately, 'everyone' for the global chat, or 'team' for your team's chat in team games.",
                     },
                     text: { type: "string" },
                 },
