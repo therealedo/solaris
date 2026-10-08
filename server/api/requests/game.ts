@@ -186,6 +186,16 @@ const parseGameSettingsGeneral: Validator<GameSettingsGeneralBase> = object({
         "classic",
         stringEnumeration<AiDifficulty, AiDifficulty[]>([...AI_DIFFICULTIES]),
     ),
+    aiOnlineHours: withDefault("disabled", enabledDisabled),
+    aiOpponentChoices: maybeUndefined(
+        array(
+            object({
+                persona: maybeUndefined(maybeNull(string)),
+                alias: maybeUndefined(maybeNull(string)),
+                avatar: maybeUndefined(maybeNull(number)),
+            }),
+        ),
+    ),
 });
 
 const parseGameSettingsGalaxy: Validator<GameSettingsGalaxyReq> = object({

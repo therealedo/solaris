@@ -1,8 +1,13 @@
 import { MathRandomGen, SeededRandomGen } from "../utils/randomGen";
 
-import { ValidationError } from "@solaris/common";
+import {
+    AiOpponentChoice,
+    UNICODE_PRINTABLE_CHARACTERS_WITH_WHITESPACE,
+    ValidationError,
+} from "@solaris/common";
 import { createPersonaStates } from "./botPersonas";
 import { Game } from "./types/Game";
+import { Player } from "./types/Player";
 import UserAchievementService from "./userAchievement";
 import ConversationService from "./conversation";
 import GameFluxService from "./gameFlux";
@@ -359,7 +364,13 @@ export default class GameCreateService {
         if (!isSinglePlayer && !aiOpponents) {
             // Only AI opponents with personas use the difficulty setting.
             settings.general.aiDifficulty = "classic";
+            settings.general.aiOnlineHours = "disabled";
+            settings.general.aiOpponentChoices = undefined;
         }
+
+        settings.general.aiOpponentChoices = this._validateAiOpponentChoices(
+            settings.general.aiOpponentChoices,
+        );
 
         if (settings.gameTime.maxTurnWait === 0 && !isSinglePlayer) {
             throw new ValidationError(
@@ -753,12 +764,10 @@ export default class GameCreateService {
         this.gameJoinService.assignNonUserPlayersToAI(game);
 
         // Give every AI opponent a personality for diplomacy and chat.
-        const bots = game.galaxy.players.filter((p) => !p.userId);
-        const personas = createPersonaStates(bots.length, Math.random);
-
-        bots.forEach((bot, i) => {
-            bot.aiPersona = personas[i];
-        });
+        this._giveBotsPersonas(
+            game,
+            game.galaxy.players.filter((p) => !p.userId),
+        );
     }
 
     // In a game with several humans, hands random slots to AI opponents with personas
@@ -779,13 +788,86 @@ export default class GameCreateService {
         }
 
         const bots = slots.slice(0, count);
-        const personas = createPersonaStates(bots.length, Math.random);
 
         this.gameJoinService.assignNonUserPlayersToAI(game, false, bots);
+        this._giveBotsPersonas(game, bots);
+
+        bots.forEach((bot) => {
+            bot.ready = true;
+        });
+    }
+
+    // Personas for the bots, with any persona, name and avatar the creator picked.
+    // The picks aren't kept in the settings, where other players could read them.
+    _giveBotsPersonas(game: Game, bots: Player[]) {
+        const choices = game.settings.general.aiOpponentChoices ?? [];
+        const personas = createPersonaStates(
+            bots.length,
+            Math.random,
+            choices.map((c) => c.persona),
+        );
+        const avatars = new Set(
+            this.gameJoinService.avatarService
+                .listAllSolarisAvatars()
+                .map((a) => a.id.toString()),
+        );
 
         bots.forEach((bot, i) => {
+            const choice = choices[i];
+
             bot.aiPersona = personas[i];
-            bot.ready = true;
+
+            if (choice?.avatar != null && avatars.has(String(choice.avatar))) {
+                bot.avatar = String(choice.avatar);
+            }
+
+            if (choice?.alias) {
+                const taken = game.galaxy.players.some(
+                    (p) =>
+                        p !== bot &&
+                        (p.alias || "").toLowerCase() ===
+                            choice.alias!.toLowerCase(),
+                );
+
+                if (!taken) {
+                    bot.alias = choice.alias;
+                }
+            }
+        });
+
+        game.settings.general.aiOpponentChoices = undefined;
+    }
+
+    _validateAiOpponentChoices(
+        choices: AiOpponentChoice[] | undefined,
+    ): AiOpponentChoice[] | undefined {
+        if (!choices?.length) {
+            return undefined;
+        }
+
+        return choices.slice(0, 64).map((c) => {
+            const alias = (c.alias ?? "").replace(/\s+/g, " ").trim();
+
+            if (alias && (alias.length < 3 || alias.length > 24)) {
+                throw new ValidationError(
+                    "AI opponent names must be between 3 and 24 characters long.",
+                );
+            }
+
+            if (
+                alias &&
+                !UNICODE_PRINTABLE_CHARACTERS_WITH_WHITESPACE.test(alias)
+            ) {
+                throw new ValidationError(
+                    "AI opponent names can only contain printable characters.",
+                );
+            }
+
+            return {
+                persona: c.persona || null,
+                alias: alias || null,
+                avatar: c.avatar ?? null,
+            };
         });
     }
 }

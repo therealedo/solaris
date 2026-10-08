@@ -1,5 +1,6 @@
 import { pickAgenda } from "./botAgendas";
-import { AiPersonaState } from "./types/Ai";
+import { createSchedule } from "./botPresence";
+import { AiPersonaState, CustomPersona } from "./types/Ai";
 
 // Personalities given to AI opponents. Each persona drives how a bot
 // talks and schemes when an LLM is available, and tunes the rule based fallback.
@@ -114,6 +115,11 @@ export const DEFAULT_PERSONA = BOT_PERSONAS[3];
 // The most a quirk shifts one of a persona's traits.
 const MAX_QUIRK = 0.15;
 
+// The key of a persona generated at random for one bot.
+export const RANDOM_PERSONA_KEY = "random";
+// Persona choices on the create page besides the named personas.
+export const ANY_PERSONA_CHOICE = "any";
+
 export function getPersona(key: string | null | undefined): BotPersona {
     return BOT_PERSONAS.find((p) => p.key === key) ?? DEFAULT_PERSONA;
 }
@@ -122,7 +128,10 @@ export function getPersona(key: string | null | undefined): BotPersona {
 export function getBotPersona(
     state: AiPersonaState | null | undefined,
 ): BotPersona {
-    const persona = getPersona(state?.key);
+    const persona: BotPersona =
+        state?.key === RANDOM_PERSONA_KEY && state.custom
+            ? { key: RANDOM_PERSONA_KEY, ...state.custom }
+            : getPersona(state?.key);
     const quirks = state?.quirks;
 
     if (!quirks) {
@@ -141,35 +150,62 @@ export function getBotPersona(
 }
 
 // New persona states for a game's bots: different personas while they last, each
-// with random quirks. random() returns a number in [0, 1).
+// with random quirks, a secret agenda and hours at the keyboard. `choices` holds
+// what the game's creator picked for each bot: a persona key, "random" for a
+// generated persona, or "any" (the default) for one of the named personas.
+// random() returns a number in [0, 1).
 export function createPersonaStates(
     count: number,
     random: () => number,
+    choices: (string | null | undefined)[] = [],
 ): AiPersonaState[] {
     const quirk = () => Math.round((random() * 2 - 1) * MAX_QUIRK * 100) / 100;
+    const wanted = Array.from({ length: count }, (_, i) => {
+        const choice = choices[i];
 
-    return pickPersonaKeys(count, (max) => Math.floor(random() * max)).map(
-        (key) => ({
+        return choice === RANDOM_PERSONA_KEY ||
+            BOT_PERSONAS.some((p) => p.key === choice)
+            ? choice!
+            : ANY_PERSONA_CHOICE;
+    });
+    const anyKeys = pickPersonaKeys(
+        wanted.filter((c) => c === ANY_PERSONA_CHOICE).length,
+        (max) => Math.floor(random() * max),
+        wanted.filter((c) => c !== ANY_PERSONA_CHOICE),
+    );
+
+    return wanted.map((choice) => {
+        const key = choice === ANY_PERSONA_CHOICE ? anyKeys.shift()! : choice;
+
+        return {
             key,
             notes: [],
             lastStrategyCycle: 0,
+            ...(key === RANDOM_PERSONA_KEY
+                ? { custom: generateRandomPersona(random) }
+                : {}),
             quirks: {
                 loyalty: quirk(),
                 aggression: quirk(),
                 honesty: quirk(),
             },
             agenda: pickAgenda(random),
-        }),
-    );
+            schedule: createSchedule(random),
+        };
+    });
 }
 
 // Assigns a different persona to each bot while personas remain, then repeats.
+// Personas in `taken` (picked by hand for other bots) come last.
 export function pickPersonaKeys(
     count: number,
     random: (maxExclusive: number) => number,
+    taken: string[] = [],
 ): string[] {
     const keys: string[] = [];
-    let pool: string[] = [];
+    let pool: string[] = BOT_PERSONAS.map((p) => p.key).filter(
+        (k) => !taken.includes(k),
+    );
 
     for (let i = 0; i < count; i++) {
         if (!pool.length) {
@@ -180,4 +216,102 @@ export function pickPersonaKeys(
     }
 
     return keys;
+}
+
+// Building blocks for random personas. Every one is a player who wants to win and
+// plays the game seriously, each in their own way: no trolls, no saboteurs.
+const RANDOM_TITLE_ADJECTIVES = [
+    "Calculating",
+    "Restless",
+    "Patient",
+    "Ambitious",
+    "Cautious",
+    "Bold",
+    "Cunning",
+    "Stubborn",
+    "Pragmatic",
+    "Proud",
+    "Quiet",
+    "Relentless",
+];
+
+const RANDOM_TITLE_NOUNS = [
+    "Strategist",
+    "Expansionist",
+    "Tactician",
+    "Opportunist",
+    "Builder",
+    "Negotiator",
+    "Commander",
+    "Veteran",
+    "Newcomer",
+    "Schemer",
+];
+
+const RANDOM_DRIVES = [
+    "Wants to win by expanding faster than anyone and claiming every free star in reach.",
+    "Wants to win by building an economy nobody can match, then overwhelming rivals late in the game.",
+    "Wants to win by turtling behind strong defences and striking once the others have worn each other down.",
+    "Wants to win by becoming the ally everyone needs, then cashing in at the right moment.",
+    "Wants to win by out-researching everyone and fighting only with superior technology.",
+    "Wants to win by picking one neighbour at a time and grinding them down.",
+    "Wants to win by playing the others against each other and staying out of the big wars.",
+    "Wants to win by controlling the centre of the galaxy and its trade routes.",
+    "Plays every game to learn and improve, and wants to prove it by finishing on top.",
+    "Wants to win by hitting hard and early, before the others are ready.",
+];
+
+const RANDOM_STYLES = [
+    "Casual and friendly, short sentences.",
+    "Dry humour, understated, never wastes words.",
+    "Enthusiastic and energetic, likes exclamation marks.",
+    "Cold and analytical, talks in numbers and odds.",
+    "Old-fashioned and a little theatrical.",
+    "Relaxed gamer chat: gg, np, lol, but always about the game.",
+    "Polite but blunt, says exactly what it wants.",
+    "Laconic one-liners.",
+    "Chatty and curious, asks others what they plan.",
+    "Calm and reassuring, the voice of reason.",
+];
+
+function trait(random: () => number) {
+    return Math.round((0.1 + random() * 0.85) * 100) / 100;
+}
+
+function pick<T>(items: T[], random: () => number): T {
+    return items[Math.floor(random() * items.length)];
+}
+
+// A completely random persona, within what a real player who wants to win would be.
+export function generateRandomPersona(random: () => number): CustomPersona {
+    const loyalty = trait(random);
+    const aggression = trait(random);
+    const honesty = trait(random);
+
+    const stance = [
+        loyalty >= 0.7
+            ? "Keeps its alliances."
+            : loyalty <= 0.35
+              ? "Treats alliances as temporary."
+              : "Keeps alliances while they pay off.",
+        aggression >= 0.7
+            ? "Quick to start wars."
+            : aggression <= 0.35
+              ? "Prefers to avoid wars."
+              : "Fights when it sees an opening.",
+        honesty >= 0.7
+            ? "Says what it means."
+            : honesty <= 0.35
+              ? "Bluffs and lies when it helps."
+              : "Bends the truth now and then.",
+    ].join(" ");
+
+    return {
+        title: `The ${pick(RANDOM_TITLE_ADJECTIVES, random)} ${pick(RANDOM_TITLE_NOUNS, random)}`,
+        description: `${pick(RANDOM_DRIVES, random)} ${stance} Takes the game seriously and keeps chat about the game.`,
+        speakingStyle: pick(RANDOM_STYLES, random),
+        loyalty,
+        aggression,
+        honesty,
+    };
 }

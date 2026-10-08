@@ -58,6 +58,15 @@ export const AI_DIFFICULTIES = [
 ] as const;
 export type AiDifficulty = (typeof AI_DIFFICULTIES)[number];
 
+// What the game's creator picked for one AI opponent. Only used while creating the
+// game, so other players can't read the bots' personas in the settings.
+export interface AiOpponentChoice {
+    // A persona key, "random" for a generated persona, or "any".
+    persona?: string | null;
+    alias?: string | null;
+    avatar?: number | null;
+}
+
 export const GAME_AWARD_RANK_TO = [
     "all",
     "winner",
@@ -321,6 +330,9 @@ export type GameSettingsGeneralBase = {
     // Slots taken by AI opponents with personas in a game with several humans.
     aiOpponents?: number;
     aiDifficulty?: AiDifficulty;
+    // Whether AI opponents keep human hours: asleep at night, busy part of the day.
+    aiOnlineHours?: GameSettingEnabledDisabled;
+    aiOpponentChoices?: AiOpponentChoice[];
 };
 
 export type GameSettingsGeneral<ID> = GameSettingsGeneralBase & {

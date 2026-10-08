@@ -314,6 +314,35 @@
           </select>
         </div>
 
+        <div class="mb-2" v-if="botCount > 0">
+          <label for="aiOnlineHours" class="col-form-label"
+            >AI Online Hours
+            <help-tooltip
+              tooltip="Bots live in their own time zones: they sleep at night and are busy for part of the day, so they answer slowly or only when they're back, like real players. Their online status matches when Player Online Status is visible."
+          /></label>
+          <select
+            class="form-select"
+            id="aiOnlineHours"
+            v-model="settings.general.aiOnlineHours"
+            :disabled="isCreatingGame"
+          >
+            <option
+              v-for="opt in options.general.aiOnlineHours"
+              v-bind:key="opt.value"
+              v-bind:value="opt.value"
+            >
+              {{ opt.text }}
+            </option>
+          </select>
+        </div>
+
+        <ai-opponent-picker
+          v-if="botCount > 0"
+          v-model="settings.general.aiOpponentChoices!"
+          :count="botCount"
+          :disabled="isCreatingGame"
+        />
+
         <div class="mb-2">
           <label for="playerType" class="col-form-label"
             >Player Type
@@ -2639,6 +2668,7 @@ import {
 } from "@/services/typedapi";
 import CustomGalaxy from "@/views/game/gameCreation/CustomGalaxy.vue";
 import ResearchCostProgression from "@/views/game/gameCreation/ResearchCostProgression.vue";
+import AiOpponentPicker from "@/views/game/gameCreation/AiOpponentPicker.vue";
 
 import { useToast } from "vue-toast-notification";
 const httpClient = inject(httpInjectionKey)!;
@@ -2690,8 +2720,17 @@ const loadSettingsFromTemplate = async (templateName: string) => {
 const withAiDefaults = (s: GameSettingsSpec) => {
   s.general.aiOpponents ??= 0;
   s.general.aiDifficulty ??= "normal";
+  s.general.aiOnlineHours ??= "enabled";
+  s.general.aiOpponentChoices ??= [];
   return s;
 };
+
+// AI opponents with personas: every other slot in single player.
+const botCount = computed(() =>
+  isSinglePlayer.value
+    ? Math.max(0, (settings.value?.general.playerLimit ?? 1) - 1)
+    : (settings.value?.general.aiOpponents ?? 0),
+);
 
 const aiOpponentOptions = computed(() => {
   const max = Math.max(0, (settings.value?.general.playerLimit ?? 2) - 2);

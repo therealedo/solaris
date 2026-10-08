@@ -49,6 +49,58 @@ export interface AiPersonaState {
     replans?: { cycle: number; count: number };
     // Set once the bot has posted its end of game debrief.
     debriefed?: boolean;
+    // A persona generated at random for this bot, used when key is "random".
+    custom?: CustomPersona;
+    // When the bot is at its keyboard, like a player in some time zone.
+    schedule?: BotSchedule;
+    // How a badly beaten bot copes: going quiet, surrendering to a stronger empire
+    // (and paying it tribute), or quitting and leaving its empire to the plain AI.
+    endgame?: BotEndgame;
+    // Leaders the bot has publicly called a coalition against.
+    calledOut?: string[];
+    // Credits the bot has asked each player to repay, by player id.
+    debts?: Record<string, BotDebt>;
+    // Credits the bot gave away on purpose (gifts, bribes, tribute), by player id,
+    // which it doesn't expect back.
+    gifted?: Record<string, number>;
+    // Tick of the bot's last message in its team's chat.
+    lastTeamPostTick?: number;
+    // Set once the bot has voted to end the game.
+    votedToQuit?: boolean;
+}
+
+export interface CustomPersona {
+    title: string;
+    description: string;
+    speakingStyle: string;
+    loyalty: number;
+    aggression: number;
+    honesty: number;
+}
+
+export interface BotSchedule {
+    // The bot's time zone, in hours from UTC.
+    utcOffset: number;
+    // Local hour the bot goes to sleep, and for how many hours.
+    sleepStart: number;
+    sleepHours: number;
+    // Local hour the bot is busy (work, errands) and slow to answer, and for how long.
+    busyStart: number;
+    busyHours: number;
+}
+
+export interface BotEndgame {
+    mode: "quiet" | "surrendered" | "quit";
+    // The empire a surrendered bot pays tribute to.
+    playerId?: string | null;
+    cycle: number;
+}
+
+export interface BotDebt {
+    // How much was owed when the bot last asked.
+    amount: number;
+    asked: number;
+    lastAskedCycle: number;
 }
 
 export interface BotFeeling {

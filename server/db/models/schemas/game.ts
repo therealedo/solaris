@@ -157,6 +157,12 @@ const schema = new Schema({
                 enum: ["classic", "easy", "normal", "hard", "brutal"],
                 default: "classic",
             },
+            aiOnlineHours: {
+                type: Types.String,
+                required: false,
+                enum: ["disabled", "enabled"],
+                default: "disabled",
+            },
             afkSlotsOpen: {
                 type: Types.String,
                 required: false,

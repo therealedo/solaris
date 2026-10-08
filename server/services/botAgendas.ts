@@ -1,4 +1,4 @@
-import { getPersona } from "./botPersonas";
+import { BotPersona, getPersona } from "./botPersonas";
 import { BotAgenda } from "./types/Ai";
 
 // Secret goals handed to AI opponents at the start. They shape a bot's plans and are
@@ -95,12 +95,13 @@ export function isAgendaAchieved(
 
 // The debrief a bot posts when no LLM is available to write one in character.
 export function debriefTemplate(
-    personaKey: string,
+    personaKey: string | BotPersona,
     agenda: BotAgenda | null | undefined,
     rivalName: string | null,
     achieved: boolean,
 ): string {
-    const persona = getPersona(personaKey);
+    const persona =
+        typeof personaKey === "string" ? getPersona(personaKey) : personaKey;
     const definition = getAgenda(agenda?.key);
     const goal = definition
         ? ` My secret goal was to ${definition.reveal.replace("{rival}", rivalName ?? "my rival")}, ${achieved ? "and I did it." : "and I fell short."}`

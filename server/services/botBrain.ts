@@ -39,6 +39,7 @@ import {
     takeSnapshot,
 } from "./botObservations";
 import { BotPersona, getBotPersona, getPersona } from "./botPersonas";
+import { BotPresence, getPresence, msUntilAwake } from "./botPresence";
 import { LlmProvider, LlmUnavailableError } from "./llm/types";
 import Repository from "./repository";
 import { AiPersonaState } from "./types/Ai";
@@ -108,6 +109,7 @@ export interface BotBrainOptions {
     // manipulated. Costs a request per such reply, so it is off by default.
     reviewReplies?: boolean;
     random?: () => number;
+    now?: () => Date;
 }
 
 interface PlanRequest {
@@ -135,6 +137,7 @@ export default class BotBrainService {
     ) => Promise<boolean>;
     options: BotBrainOptions;
     random: () => number;
+    now: () => Date;
 
     // LLM replies per game, bot, player and production cycle.
     private replyCounts = new Map<string, number>();
@@ -171,6 +174,7 @@ export default class BotBrainService {
         this.runWithGameLock = runWithGameLock;
         this.options = options;
         this.random = options.random ?? Math.random;
+        this.now = options.now ?? (() => new Date());
     }
 
     // Whether the game has AI opponents with personas.
@@ -207,9 +211,18 @@ export default class BotBrainService {
         eventService: IEventService,
         notificationService: INotificationService,
     ) {
-        return this._runExclusive(`strategy:${gameId.toString()}`, () =>
-            this.playStrategyTurns(gameId, eventService, notificationService),
-        );
+        return this._runExclusive(`strategy:${gameId.toString()}`, async () => {
+            await this.playStrategyTurns(
+                gameId,
+                eventService,
+                notificationService,
+            );
+            await this._catchUpOnChat(
+                gameId,
+                eventService,
+                notificationService,
+            );
+        });
     }
 
     // Like a person at a keyboard: usually a few seconds, sometimes a while, now and
@@ -233,6 +246,8 @@ export default class BotBrainService {
         conversationId: DBObjectId,
         eventService: IEventService,
         notificationService: INotificationService,
+        // Set when a bot that was away comes back to answer.
+        onlyBotId?: string,
     ) {
         let ctx = await this._loadContext(
             gameId,
@@ -262,6 +277,10 @@ export default class BotBrainService {
         }
 
         for (const bot of this.botDiplomacyService.listBots(ctx.game)) {
+            if (onlyBotId && bot._id.toString() !== onlyBotId) {
+                continue;
+            }
+
             const message = this.botDiplomacyService.findPendingMessage(
                 ctx,
                 bot,
@@ -270,6 +289,23 @@ export default class BotBrainService {
 
             if (!message) {
                 continue;
+            }
+
+            // Away from the keyboard: the bot answers when it's back.
+            if (!onlyBotId) {
+                const awayMs = this._awayDelayMs(ctx.game, bot);
+
+                if (awayMs > 0) {
+                    this._replyLater(
+                        gameId,
+                        conversationId,
+                        bot,
+                        awayMs,
+                        eventService,
+                        notificationService,
+                    );
+                    continue;
+                }
             }
 
             // In a busy group chat, people let the odd remark go unanswered.
@@ -285,6 +321,113 @@ export default class BotBrainService {
                 await this._replyAsBot(ctx, bot, convo, message);
             } catch (e) {
                 log.error(e, `Bot ${bot.alias} failed to reply`);
+            }
+        }
+    }
+
+    // Whether the bot is at its keyboard, when the game gives bots human hours.
+    _presence(game: Game, bot: Player): BotPresence {
+        if (game.settings.general.aiOnlineHours !== "enabled") {
+            return "online";
+        }
+
+        return getPresence(bot.aiPersona?.schedule, this.now());
+    }
+
+    // How long a message waits because the bot is away: until it wakes up, or a few
+    // minutes when it is busy and doesn't check the chat straight away. 0 when it
+    // answers now.
+    _awayDelayMs(game: Game, bot: Player): number {
+        const presence = this._presence(game, bot);
+
+        if (presence === "asleep") {
+            return (
+                msUntilAwake(bot.aiPersona?.schedule, this.now()) +
+                (2 + this.random() * 18) * 60000
+            );
+        }
+
+        if (presence === "busy" && this.random() < 0.6) {
+            return (3 + this.random() * 17) * 60000;
+        }
+
+        return 0;
+    }
+
+    _replyLater(
+        gameId: DBObjectId,
+        conversationId: DBObjectId,
+        bot: Player,
+        delayMs: number,
+        eventService: IEventService,
+        notificationService: INotificationService,
+    ) {
+        const botId = bot._id.toString();
+
+        // Not awaited: the reply comes much later. Messages that arrive meanwhile share
+        // it. After a server restart, the next tick's catch up answers instead.
+        void this._runExclusive(
+            `away:${conversationId.toString()}:${botId}`,
+            async () => {
+                await this.delay(delayMs);
+                await this.replyToConversation(
+                    gameId,
+                    conversationId,
+                    eventService,
+                    notificationService,
+                    botId,
+                );
+            },
+        );
+    }
+
+    // After a tick, bots that are at their keyboard answer messages still waiting for
+    // them, for example ones that arrived while they slept.
+    async _catchUpOnChat(
+        gameId: DBObjectId,
+        eventService: IEventService,
+        notificationService: INotificationService,
+    ) {
+        const ctx = await this._loadContext(
+            gameId,
+            eventService,
+            notificationService,
+        );
+
+        if (!ctx || ctx.game.settings.general.aiOnlineHours !== "enabled") {
+            return;
+        }
+
+        for (const bot of this.botDiplomacyService.listBots(ctx.game)) {
+            if (this._presence(ctx.game, bot) !== "online") {
+                continue;
+            }
+
+            for (const convo of ctx.game.conversations) {
+                if (
+                    !convo.participants.some(
+                        (p) => p.toString() === bot._id.toString(),
+                    ) ||
+                    !this.botDiplomacyService.findPendingMessage(
+                        ctx,
+                        bot,
+                        convo,
+                    )
+                ) {
+                    continue;
+                }
+
+                await this._runExclusive(
+                    `away:${convo._id.toString()}:${bot._id.toString()}`,
+                    () =>
+                        this.replyToConversation(
+                            gameId,
+                            convo._id,
+                            eventService,
+                            notificationService,
+                            bot._id.toString(),
+                        ),
+                );
             }
         }
     }
@@ -449,7 +592,9 @@ export default class BotBrainService {
         const requests: PlanRequest[] = [];
 
         for (const bot of this.botDiplomacyService.listBots(game)) {
-            if (!bot.aiPersona) {
+            // A sleeping player neither plans nor notices anything; it catches up on
+            // what happened (its snapshot is kept) when it wakes.
+            if (!bot.aiPersona || this._presence(game, bot) === "asleep") {
                 continue;
             }
 
@@ -1025,7 +1170,7 @@ export default class BotBrainService {
             isWinner: winnerId === bot._id.toString(),
         });
         const fallback = debriefTemplate(
-            persona.key,
+            getBotPersona(persona),
             agenda,
             rival?.alias ?? null,
             achieved,
@@ -1050,7 +1195,7 @@ export default class BotBrainService {
                 system: this.buildSystemPrompt(game, bot),
                 prompt: [
                     `The game is over. ${winner ? `${winner.alias} won.` : "Nobody won outright."}`,
-                    `You were secretly ${getPersona(persona.key).title}. Your secret goal: ${describeAgenda(agenda, rival?.alias ?? null) || "none"} You ${achieved ? "achieved it" : "did not achieve it"}.`,
+                    `You were secretly ${getBotPersona(persona).title}. Your secret goal: ${describeAgenda(agenda, rival?.alias ?? null) || "none"} You ${achieved ? "achieved it" : "did not achieve it"}.`,
                     notes.length
                         ? `Your private notes from the game:\n${notes.map((n) => `- ${n}`).join("\n")}`
                         : "",

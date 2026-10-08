@@ -1,5 +1,5 @@
 import { BOT_DIPLOMACY_ACTIONS, BotDiplomacyAction } from "./botDiplomacy";
-import { getPersona } from "./botPersonas";
+import { getBotPersona } from "./botPersonas";
 import { LlmSchema } from "./llm/types";
 import { Player } from "./types/Player";
 
@@ -264,13 +264,13 @@ export function revealsSecrets(
     nonce: string,
 ): boolean {
     const text = reply.toLowerCase();
-    const persona = getPersona(bot.aiPersona?.key);
+    const persona = getBotPersona(bot.aiPersona);
 
     if (
         text.includes(nonce) ||
         text.includes("messages-") ||
         text.includes(persona.title.toLowerCase()) ||
-        text.includes(persona.key.toLowerCase())
+        (persona.key !== "random" && text.includes(persona.key.toLowerCase()))
     ) {
         return true;
     }
