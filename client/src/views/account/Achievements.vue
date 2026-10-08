@@ -29,6 +29,8 @@
     <user-badges :userId="userId" />
 
     <achievement-stats v-if="user" :user="user" />
+
+    <single-player-record v-if="user && isOwnProfile" />
   </view-container>
 </template>
 
@@ -46,11 +48,17 @@ import { getAchievements } from "@/services/typedapi/user";
 import type { AchievementsUser } from "@solaris/common";
 import { useRoute } from "vue-router";
 import AchievementStats from "@/views/account/components/AchievementStats.vue";
+import SinglePlayerRecord from "@/views/account/components/SinglePlayerRecord.vue";
+import { useUserStore } from "@/stores/user";
 
 const httpClient = inject(httpInjectionKey)!;
 
 const route = useRoute();
 const userId = computed(() => route.params.userId as string);
+
+const userStore = useUserStore();
+// Single player results are private, so only shown on the user's own page.
+const isOwnProfile = computed(() => userStore.userId === userId.value);
 
 const user: Ref<AchievementsUser<string> | null> = ref(null);
 const loadError = ref(false);

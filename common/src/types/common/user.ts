@@ -1,3 +1,4 @@
+import { type AiDifficulty } from "./game";
 import { type UserGameSettings } from "./settings";
 import { type UserSubscriptions } from "./subscriptions";
 import { type Statistics } from "./stats";
@@ -85,4 +86,28 @@ export type UserPrivate<ID> = UserPublic<ID> & {
     };
     subscriptions: UserSubscriptions;
     tutorialsCompleted?: string[];
+};
+
+export type SinglePlayerResultCounts = {
+    played: number;
+    won: number;
+    lost: number;
+};
+
+export type SinglePlayerRecentResult = {
+    difficulty: AiDifficulty;
+    won: boolean;
+    date: Date;
+};
+
+// A user's results in single player games, kept apart from the online rank.
+export type SinglePlayerRecord = SinglePlayerResultCounts & {
+    byDifficulty: Record<AiDifficulty, SinglePlayerResultCounts>;
+    // The latest results, newest last.
+    recent: SinglePlayerRecentResult[];
+};
+
+export type SinglePlayerRecordResponse = {
+    record: SinglePlayerRecord;
+    suggestedDifficulty: AiDifficulty;
 };

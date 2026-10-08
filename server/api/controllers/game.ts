@@ -10,6 +10,10 @@ import {
     parseKickPlayerRequest,
 } from "../requests/game";
 import { Player } from "../../services/types/Player";
+import {
+    assertCanViewGameStory,
+    buildGameStory,
+} from "../../services/gameStory";
 
 const log = logger("Game Controller");
 
@@ -466,6 +470,22 @@ export default (container: DependencyContainer) => {
                     );
                 }
 
+                return next();
+            } catch (err) {
+                return next(err);
+            }
+        },
+        getStory: async (req, res, next) => {
+            try {
+                assertCanViewGameStory(req.game);
+
+                const events = await container.eventService.listGameStoryEvents(
+                    req.game._id,
+                );
+
+                res.status(200).json(
+                    buildGameStory(req.game, events, req.player),
+                );
                 return next();
             } catch (err) {
                 return next(err);

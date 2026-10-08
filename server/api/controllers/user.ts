@@ -153,6 +153,19 @@ export default (container: DependencyContainer) => {
                 return next(err);
             }
         },
+        getSinglePlayerRecord: async (req, res, next) => {
+            try {
+                const result =
+                    await container.userService.getSinglePlayerRecord(
+                        req.session.userId,
+                    );
+
+                res.status(200).json(result);
+                return next();
+            } catch (err) {
+                return next(err);
+            }
+        },
         detailMe: async (req, res, next) => {
             try {
                 let user = await container.userService.getMe(

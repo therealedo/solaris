@@ -30,6 +30,7 @@ export * from "./types/common/stats";
 export * from "./types/common/flux";
 export * from "./types/common/customGalaxy";
 export * from "./types/common/tutorial";
+export * from "./types/common/gameStory";
 export * from "./types/common/specialStar";
 export * from "./types/common/rating";
 export * from "./types/common/guild";

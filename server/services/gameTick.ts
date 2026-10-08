@@ -1003,7 +1003,11 @@ export default class GameTickService extends EventEmitter {
                 await eventService.createGameEndedEvent(e);
                 await notificationService.onGameEnded(e);
                 await emailService.sendGameFinishedEmail(e.gameId);
-            } else if (winner.kind === "player") {
+            } else if (this.gameTypeService.isSinglePlayerGame(game)) {
+                this._recordSinglePlayerResults(game, gameUsers, winner);
+            }
+
+            if (isSoloGame && winner.kind === "player") {
                 // game is tutorial
                 const userId = winner.player.userId;
                 const user = gameUsers.find(
@@ -1025,6 +1029,40 @@ export default class GameTickService extends EventEmitter {
         }
 
         return false;
+    }
+
+    // Single player games don't count towards rank, but each human's result goes
+    // into their separate single player record.
+    _recordSinglePlayerResults(
+        game: Game,
+        gameUsers: User[],
+        winner: GameWinner,
+    ) {
+        for (const player of game.galaxy.players) {
+            const user = gameUsers.find(
+                (u) =>
+                    player.userId &&
+                    u._id.toString() === player.userId.toString(),
+            );
+
+            if (!user) {
+                continue;
+            }
+
+            const playerId = player._id.toString();
+            const won =
+                winner.kind === "player"
+                    ? winner.player._id.toString() === playerId
+                    : winner.team.players.some(
+                          (id) => id.toString() === playerId,
+                      );
+
+            this.userService.applySinglePlayerResult(
+                user,
+                game.settings.general.aiDifficulty,
+                won,
+            );
+        }
     }
 
     _awardEndGameRank(game: Game, gameUsers: User[], awardCredits: boolean) {

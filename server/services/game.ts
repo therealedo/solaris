@@ -229,6 +229,18 @@ export default class GameService extends EventEmitter {
 
         // If its a solo game (tutorial or single player) then straight up delete it.
         if (this.gameTypeService.isSoloGame(game)) {
+            // Giving up on a single player game counts as a loss.
+            if (
+                player.userId &&
+                this.gameTypeService.isSinglePlayerGame(game)
+            ) {
+                await this.userService.recordSinglePlayerResult(
+                    player.userId,
+                    game.settings.general.aiDifficulty,
+                    false,
+                );
+            }
+
             return this.delete(game, undefined, eventService);
         }
 

@@ -10,7 +10,11 @@ import {
 import type { LeaderboardUser } from "../../types/common/leaderboard";
 import type { UserGameSettings } from "../../types/common/settings";
 import type { UserSubscriptions } from "../../types/common/subscriptions";
-import type { UserPrivate, UserPublic } from "../../types/common/user";
+import type {
+    SinglePlayerRecordResponse,
+    UserPrivate,
+    UserPublic,
+} from "../../types/common/user";
 import type { UserAvatar } from "../../types/common/avatar";
 import type { GuildDataForUser } from "../../types/common/guild";
 
@@ -49,6 +53,9 @@ export const createUserRoutes = <ID>() => ({
         "/api/user/subscriptions",
     ),
     getCredits: new SimpleGetRoute<{ credits: number }>("/api/user/credits"),
+    getSinglePlayerRecord: new SimpleGetRoute<SinglePlayerRecordResponse>(
+        "/api/user/singlePlayerRecord",
+    ),
     detailMe: new SimpleGetRoute<UserPrivate<ID>>("/api/user/"),
     listMyAvatars: new SimpleGetRoute<{ avatars: UserAvatar[] }>(
         "/api/user/avatars",

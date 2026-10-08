@@ -5,6 +5,13 @@ const Types = Schema.Types;
 import StatsSchema from "./stats";
 import BadgeSchema from "./badge";
 
+// Single player results at one AI difficulty.
+const resultCounts = () => ({
+    played: { type: Types.Number, default: 0 },
+    won: { type: Types.Number, default: 0 },
+    lost: { type: Types.Number, default: 0 },
+});
+
 const schema = new Schema({
     username: { type: Types.String, required: true },
     guildId: { type: Types.ObjectId, default: null },
@@ -490,6 +497,30 @@ const schema = new Schema({
         },
     },
     tutorialsCompleted: [{ type: Types.String, required: false }],
+    singlePlayerRecord: {
+        played: { type: Types.Number, default: 0 },
+        won: { type: Types.Number, default: 0 },
+        lost: { type: Types.Number, default: 0 },
+        byDifficulty: {
+            classic: resultCounts(),
+            easy: resultCounts(),
+            normal: resultCounts(),
+            hard: resultCounts(),
+            brutal: resultCounts(),
+        },
+        recent: [
+            {
+                _id: false,
+                difficulty: {
+                    type: Types.String,
+                    required: true,
+                    enum: ["classic", "easy", "normal", "hard", "brutal"],
+                },
+                won: { type: Types.Boolean, required: true },
+                date: { type: Types.Date, required: true },
+            },
+        ],
+    },
 });
 
 export default schema;
