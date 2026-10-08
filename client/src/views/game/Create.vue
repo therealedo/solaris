@@ -808,7 +808,9 @@
             :disabled="isCreatingGame"
           >
             <option
-              v-for="opt in options.gameTime.maxTurnWait"
+              v-for="opt in options.gameTime.maxTurnWait.filter(
+                (o) => o.value !== 0 || isSinglePlayer,
+              )"
               v-bind:key="opt.value"
               v-bind:value="opt.value"
             >
@@ -2764,6 +2766,9 @@ const handleSubmit = async (e: Event) => {
   if (isSinglePlayer.value) {
     settings.value!.general.password = null;
     settings.value!.general.aiOpponents = 0;
+  } else if (settings.value!.gameTime.maxTurnWait === 0) {
+    // Only single player games can wait forever for a turn.
+    settings.value!.gameTime.maxTurnWait = 1440;
   }
 
   const response = await createGame(httpClient)(settings.value!);

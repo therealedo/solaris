@@ -925,6 +925,10 @@ export const GAME_CREATION_OPTIONS = {
         ],
         maxTurnWait: [
             {
+                value: 0,
+                text: "Unlimited (single player only)",
+            },
+            {
                 value: 1,
                 text: "1 Minute",
             },

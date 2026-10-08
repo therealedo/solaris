@@ -981,8 +981,8 @@ const schema = new Schema({
                 type: Types.Number,
                 required: true,
                 enum: [
-                    1, 5, 10, 30, 60, 120, 240, 360, 480, 600, 720, 1080, 1440,
-                    2880,
+                    0, 1, 5, 10, 30, 60, 120, 240, 360, 480, 600, 720, 1080,
+                    1440, 2880,
                 ],
                 default: 1440,
             }, // Time in minutes

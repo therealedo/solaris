@@ -361,6 +361,12 @@ export default class GameCreateService {
             settings.general.aiDifficulty = "classic";
         }
 
+        if (settings.gameTime.maxTurnWait === 0 && !isSinglePlayer) {
+            throw new ValidationError(
+                "Only single player games can have an unlimited turn wait.",
+            );
+        }
+
         if (isOfficialGame && isSinglePlayer) {
             throw new ValidationError(
                 "Single player games must be created by a user.",

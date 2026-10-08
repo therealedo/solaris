@@ -245,8 +245,9 @@ export const GAME_TIME_START_DELAYS = [
 
 export type GameTimeStartDelay = (typeof GAME_TIME_START_DELAYS)[number];
 
+// 0 means no limit: the turn waits until everyone is ready (single player only).
 export const GAME_TIME_MAX_TURN_WAITS = [
-    1, 5, 10, 30, 60, 120, 240, 360, 480, 600, 720, 1080, 1440, 2880,
+    0, 1, 5, 10, 30, 60, 120, 240, 360, 480, 600, 720, 1080, 1440, 2880,
 ] as const;
 
 export type GameTimeMaxTurnWait = (typeof GAME_TIME_MAX_TURN_WAITS)[number];

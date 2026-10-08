@@ -478,6 +478,11 @@ export default class GameTickService extends EventEmitter {
                 return true;
             }
 
+            // No limit: the turn waits for everyone to be ready.
+            if (game.settings.gameTime.maxTurnWait === 0) {
+                return false;
+            }
+
             nextTick = lastTick.plus({
                 minutes: game.settings.gameTime.maxTurnWait,
             });
