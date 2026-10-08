@@ -31,6 +31,10 @@ const RECENT_MESSAGES_IN_PROMPT = 10;
 const MIN_REPLY_DELAY_MS = 1500;
 const MAX_REPLY_DELAY_MS = 4000;
 
+// A chat reply waits for a running game tick to finish before it acts.
+const LOCKED_RETRY_DELAY_MS = 2000;
+const LOCKED_RETRIES = 5;
+
 interface ChatDecision {
     reply: string;
     action: BotDiplomacyAction;
@@ -121,8 +125,15 @@ export default class BotBrainService {
     llmProvider: LlmProvider | null;
     loadGame: (gameId: DBObjectId) => Promise<Game | null>;
     delay: (ms: number) => Promise<void>;
+    // Runs work while holding the same lock as the game tick. Resolves false, without
+    // running the work, when the game is locked by a tick in another process.
+    runWithGameLock: (
+        gameId: DBObjectId,
+        work: () => Promise<void>,
+    ) => Promise<boolean>;
 
-    private inFlight = new Set<string>();
+    // Keys with a task running, and whether another run was requested meanwhile.
+    private inFlight = new Map<string, { rerun: boolean }>();
 
     constructor(
         botDiplomacyService: BotDiplomacyService,
@@ -132,6 +143,13 @@ export default class BotBrainService {
         loadGame: (gameId: DBObjectId) => Promise<Game | null>,
         delay: (ms: number) => Promise<void> = (ms) =>
             new Promise((resolve) => setTimeout(resolve, ms)),
+        runWithGameLock: (
+            gameId: DBObjectId,
+            work: () => Promise<void>,
+        ) => Promise<boolean> = async (_gameId, work) => {
+            await work();
+            return true;
+        },
     ) {
         this.botDiplomacyService = botDiplomacyService;
         this.gameRepo = gameRepo;
@@ -139,6 +157,7 @@ export default class BotBrainService {
         this.llmProvider = llmProvider;
         this.loadGame = loadGame;
         this.delay = delay;
+        this.runWithGameLock = runWithGameLock;
     }
 
     // Called after a human sends a chat message. Runs in the background so the
@@ -149,18 +168,22 @@ export default class BotBrainService {
         eventService: IEventService,
         notificationService: INotificationService,
     ) {
-        this._runExclusive(`chat:${conversationId.toString()}`, async () => {
-            await this.delay(
-                MIN_REPLY_DELAY_MS +
-                    Math.random() * (MAX_REPLY_DELAY_MS - MIN_REPLY_DELAY_MS),
-            );
-            await this.replyToConversation(
-                gameId,
-                conversationId,
-                eventService,
-                notificationService,
-            );
-        });
+        return this._runExclusive(
+            `chat:${conversationId.toString()}`,
+            async () => {
+                await this.delay(
+                    MIN_REPLY_DELAY_MS +
+                        Math.random() *
+                            (MAX_REPLY_DELAY_MS - MIN_REPLY_DELAY_MS),
+                );
+                await this.replyToConversation(
+                    gameId,
+                    conversationId,
+                    eventService,
+                    notificationService,
+                );
+            },
+        );
     }
 
     // Called after a game tick. Runs one strategy turn per bot per production cycle.
@@ -170,10 +193,10 @@ export default class BotBrainService {
         notificationService: INotificationService,
     ) {
         if (!this.llmProvider) {
-            return;
+            return Promise.resolve();
         }
 
-        this._runExclusive(`strategy:${gameId.toString()}`, () =>
+        return this._runExclusive(`strategy:${gameId.toString()}`, () =>
             this.playStrategyTurns(gameId, eventService, notificationService),
         );
     }
@@ -184,13 +207,22 @@ export default class BotBrainService {
         eventService: IEventService,
         notificationService: INotificationService,
     ) {
-        const ctx = await this._loadContext(
+        let ctx = await this._loadContext(
             gameId,
             eventService,
             notificationService,
         );
 
-        if (!ctx) {
+        for (let i = 0; ctx?.game.state.locked && i < LOCKED_RETRIES; i++) {
+            await this.delay(LOCKED_RETRY_DELAY_MS);
+            ctx = await this._loadContext(
+                gameId,
+                eventService,
+                notificationService,
+            );
+        }
+
+        if (!ctx || ctx.game.state.locked) {
             return;
         }
 
@@ -236,11 +268,13 @@ export default class BotBrainService {
 
         if (this.llmProvider && bot.aiPersona) {
             try {
-                decision = await this.llmProvider.generateJson<ChatDecision>({
-                    system: this.buildSystemPrompt(ctx.game, bot),
-                    prompt: this.buildChatPrompt(ctx, bot, convo, sender),
-                    schema: CHAT_SCHEMA,
-                });
+                decision = parseChatDecision(
+                    await this.llmProvider.generateJson<unknown>({
+                        system: this.buildSystemPrompt(ctx.game, bot),
+                        prompt: this.buildChatPrompt(ctx, bot, convo, sender),
+                        schema: CHAT_SCHEMA,
+                    }),
+                );
             } catch (e) {
                 this._logLlmFailure(e, bot);
             }
@@ -277,56 +311,111 @@ export default class BotBrainService {
         eventService: IEventService,
         notificationService: INotificationService,
     ) {
+        if (!this.llmProvider) {
+            return;
+        }
+
         const ctx = await this._loadContext(
             gameId,
             eventService,
             notificationService,
         );
 
-        if (!ctx || !this.llmProvider) {
+        if (!ctx) {
             return;
         }
 
         const cycle = ctx.game.state.productionTick;
+        // Bot id to its decision, or null when the LLM gave an unusable answer.
+        const decisions = new Map<string, StrategyDecision | null>();
 
         for (const bot of this.botDiplomacyService.listBots(ctx.game)) {
             if (!bot.aiPersona || bot.aiPersona.lastStrategyCycle >= cycle) {
                 continue;
             }
 
-            let decision: StrategyDecision;
-
             try {
-                decision =
-                    await this.llmProvider.generateJson<StrategyDecision>({
-                        system: this.buildSystemPrompt(ctx.game, bot),
-                        prompt: this.buildStrategyPrompt(ctx, bot),
-                        schema: STRATEGY_SCHEMA,
-                    });
+                decisions.set(
+                    bot._id.toString(),
+                    parseStrategyDecision(
+                        await this.llmProvider.generateJson<unknown>({
+                            system: this.buildSystemPrompt(ctx.game, bot),
+                            prompt: this.buildStrategyPrompt(ctx, bot),
+                            schema: STRATEGY_SCHEMA,
+                        }),
+                    ),
+                );
             } catch (e) {
                 this._logLlmFailure(e, bot);
 
                 if (e instanceof LlmUnavailableError) {
-                    // Out of free quota: stop for now and try again after a later tick.
-                    return;
+                    // Out of free quota: the remaining bots try again after a later tick.
+                    break;
                 }
 
-                // A broken response shouldn't be retried every tick.
-                await this._remember(ctx.game, bot, [], cycle);
-                continue;
+                decisions.set(bot._id.toString(), null);
+            }
+        }
+
+        if (!decisions.size) {
+            return;
+        }
+
+        // The LLM calls take a while and the game may have ticked meanwhile, so apply
+        // the decisions to a fresh copy of the game while holding the tick's lock.
+        const ran = await this.runWithGameLock(gameId, async () => {
+            const fresh = await this._loadContext(
+                gameId,
+                eventService,
+                notificationService,
+            );
+
+            // A new cycle has started: drop these plans, the next tick makes new ones.
+            if (!fresh || fresh.game.state.productionTick !== cycle) {
+                return;
             }
 
-            try {
-                await this._applyStrategy(ctx, bot, decision);
-            } catch (e) {
-                log.error(e, `Bot ${bot.alias} failed to apply its strategy`);
-            }
+            for (const bot of this.botDiplomacyService.listBots(fresh.game)) {
+                const botId = bot._id.toString();
 
-            await this._remember(
-                ctx.game,
-                bot,
-                [decision.plan ? `Cycle ${cycle} plan: ${decision.plan}` : ""],
-                cycle,
+                if (
+                    !decisions.has(botId) ||
+                    !bot.aiPersona ||
+                    bot.aiPersona.lastStrategyCycle >= cycle
+                ) {
+                    continue;
+                }
+
+                const decision = decisions.get(botId);
+
+                if (decision) {
+                    try {
+                        await this._applyStrategy(fresh, bot, decision);
+                    } catch (e) {
+                        log.error(
+                            e,
+                            `Bot ${bot.alias} failed to apply its strategy`,
+                        );
+                    }
+                }
+
+                // An unusable answer still uses up the cycle, so it isn't retried every tick.
+                await this._remember(
+                    fresh.game,
+                    bot,
+                    [
+                        decision?.plan
+                            ? `Cycle ${cycle} plan: ${decision.plan}`
+                            : "",
+                    ],
+                    cycle,
+                );
+            }
+        });
+
+        if (!ran) {
+            log.info(
+                `Game ${gameId} is locked, bot strategies will be planned again after the next tick`,
             );
         }
     }
@@ -336,7 +425,7 @@ export default class BotBrainService {
         bot: Player,
         decision: StrategyDecision,
     ) {
-        for (const { target, action } of (decision.actions ?? []).slice(
+        for (const { target, action } of decision.actions.slice(
             0,
             MAX_STRATEGY_ACTIONS,
         )) {
@@ -352,7 +441,7 @@ export default class BotBrainService {
             }
         }
 
-        for (const { to, text } of (decision.messages ?? []).slice(
+        for (const { to, text } of decision.messages.slice(
             0,
             MAX_STRATEGY_MESSAGES,
         )) {
@@ -593,16 +682,34 @@ export default class BotBrainService {
         }
     }
 
-    _runExclusive(key: string, work: () => Promise<void>) {
-        if (this.inFlight.has(key)) {
-            return;
+    // Runs one task per key at a time. A call made while the key's task is running
+    // runs the work once more afterwards (several such calls share that one rerun),
+    // so a chat message sent while a bot is replying still gets answered.
+    // Resolves when the key is idle again; never rejects.
+    _runExclusive(key: string, work: () => Promise<void>): Promise<void> {
+        const running = this.inFlight.get(key);
+
+        if (running) {
+            running.rerun = true;
+            return Promise.resolve();
         }
 
-        this.inFlight.add(key);
+        const state = { rerun: false };
+        this.inFlight.set(key, state);
 
-        work()
-            .catch((e) => log.error(e, `Bot brain task ${key} failed`))
-            .finally(() => this.inFlight.delete(key));
+        const loop = async () => {
+            do {
+                state.rerun = false;
+
+                try {
+                    await work();
+                } catch (e) {
+                    log.error(e, `Bot brain task ${key} failed`);
+                }
+            } while (state.rerun);
+        };
+
+        return loop().finally(() => this.inFlight.delete(key));
     }
 }
 
@@ -634,8 +741,60 @@ function describeTraitBehaviour(persona: BotPersona): string {
     return hints.join(" ");
 }
 
-export function sanitizeMessage(text: string | null | undefined): string {
-    return (text ?? "")
+function isObject(value: unknown): value is Record<string, unknown> {
+    return typeof value === "object" && value != null && !Array.isArray(value);
+}
+
+function asString(value: unknown): string {
+    return typeof value === "string" ? value : "";
+}
+
+function asAction(value: unknown): BotDiplomacyAction {
+    return BOT_DIPLOMACY_ACTIONS.includes(value as BotDiplomacyAction)
+        ? (value as BotDiplomacyAction)
+        : "none";
+}
+
+// The LLM is asked for JSON matching a schema, but nothing guarantees it, so every
+// field is checked. Returns null when the answer isn't an object at all.
+export function parseChatDecision(answer: unknown): ChatDecision | null {
+    if (!isObject(answer)) {
+        return null;
+    }
+
+    return {
+        reply: asString(answer.reply),
+        action: asAction(answer.action),
+        memoryNote: asString(answer.memoryNote),
+    };
+}
+
+export function parseStrategyDecision(
+    answer: unknown,
+): StrategyDecision | null {
+    if (!isObject(answer)) {
+        return null;
+    }
+
+    const list = (value: unknown) =>
+        Array.isArray(value) ? value.filter(isObject) : [];
+
+    return {
+        plan: asString(answer.plan),
+        actions: list(answer.actions)
+            .map((a) => ({
+                target: asString(a.target),
+                action: asAction(a.action),
+            }))
+            .filter((a) => a.target && a.action !== "none"),
+        messages: list(answer.messages)
+            .map((m) => ({ to: asString(m.to), text: asString(m.text) }))
+            .filter((m) => m.to && m.text),
+    };
+}
+
+export function sanitizeMessage(text: unknown): string {
+    return asString(text)
         .replace(/[*_`#>]/g, "")
         .replace(/\s+/g, " ")
         .trim()

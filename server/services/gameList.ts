@@ -495,6 +495,20 @@ export default class GameListService {
         });
     }
 
+    async countInProgressSinglePlayerGamesCreatedByUser(userId: DBObjectId) {
+        return await this.gameRepo.count({
+            "settings.general.type": "single_player",
+            "settings.general.createdByUserId": { $eq: userId },
+            "state.endDate": { $eq: null },
+            "galaxy.players": {
+                $elemMatch: {
+                    userId,
+                    defeated: false,
+                },
+            },
+        });
+    }
+
     async getUserTutorial(userId: DBObjectId, tutorialKey: string) {
         const tutorial = await this.gameRepo.findOne(
             {

@@ -79,7 +79,8 @@ the Diplomat...), answers your messages in character and schemes once per produc
 
 The default budget (5 requests a minute and 400 a day for each of the two server
 processes) keeps usage inside the free tier. When the budget runs out, bots quietly fall
-back to rules until it resets. Note that Google may use free tier prompts to improve its
+back to rules until it resets. The budget is shared by every game on the server, so
+each account can have at most 3 single player games in progress. Note that Google may use free tier prompts to improve its
 products, so don't put anything private in chat.
 
 **Updating** after new commits: `git pull` and run the same `up -d --build` command.

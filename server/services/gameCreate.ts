@@ -39,6 +39,10 @@ const GAME_MASTER_LIMIT = 5;
 
 const ESTABLISHED_PLAYER_LIMIT = 2;
 
+// Every single player game's AI personas share the server's free LLM quota, so one
+// account can't have too many running at once.
+const SINGLE_PLAYER_GAME_LIMIT = 3;
+
 const RANDOM_NAME_STRING = "[[[RANDOM]]]";
 
 const log = logger("GameCreateService");
@@ -327,6 +331,7 @@ export default class GameCreateService {
             } else if (isSinglePlayer) {
                 // Single player games start immediately against AI, so there are no
                 // open game limits to enforce and nobody else can join.
+                await this._validateUserCanCreateSinglePlayerGame(userId!);
                 settings.general.type = "single_player";
                 settings.general.password = null;
                 settings.general.afkSlotsOpen = "disabled";
@@ -580,6 +585,19 @@ export default class GameCreateService {
             !isAdvancedCustomGalaxy
         ) {
             throw new ValidationError("Alliance limit too low for team size.");
+        }
+    }
+
+    async _validateUserCanCreateSinglePlayerGame(userId: DBObjectId) {
+        const inProgress =
+            await this.gameListService.countInProgressSinglePlayerGamesCreatedByUser(
+                userId,
+            );
+
+        if (inProgress >= SINGLE_PLAYER_GAME_LIMIT) {
+            throw new ValidationError(
+                `You can have at most ${SINGLE_PLAYER_GAME_LIMIT} single player games in progress. Finish or quit one before starting another.`,
+            );
         }
     }
 

@@ -762,12 +762,32 @@ export default (
         randomService,
         llmProvider,
     );
+    const gameMutexService = new GameMutexService();
     const botBrainService = new BotBrainService(
         botDiplomacyService,
         gameRepository,
         gameTypeService,
         llmProvider,
         (gameId) => gameService.getByIdAll(gameId),
+        undefined,
+        async (gameId, work) => {
+            const lock = await gameMutexService.acquireMutexLock(
+                gameId.toString(),
+            );
+
+            try {
+                if (await gameLockService.isLockedInDatabase(gameId)) {
+                    return false;
+                }
+
+                await work();
+                return true;
+            } finally {
+                if (lock) {
+                    await gameMutexService.releaseMutexLock(lock);
+                }
+            }
+        },
     );
     const gameTickService = new GameTickService(
         distanceService,
@@ -880,8 +900,6 @@ export default (
     const tutorialService = new TutorialService(userService);
 
     const gamePlayerMutexService = new GamePlayerMutexService();
-
-    const gameMutexService = new GameMutexService();
 
     log.info("Dependency container initialized.");
 

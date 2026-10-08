@@ -1,5 +1,9 @@
 import { DistanceService, GameTypeService } from "@solaris/common";
-import BotBrainService from "../services/botBrain";
+import BotBrainService, {
+    parseChatDecision,
+    parseStrategyDecision,
+} from "../services/botBrain";
+import GameCreateService from "../services/gameCreate";
 import BotDiplomacyService from "../services/botDiplomacy";
 import DiplomacyService from "../services/diplomacy";
 import ReputationService from "../services/reputation";
@@ -18,6 +22,8 @@ describe("botBrain", () => {
     let llmRequests: any[];
     let diplomacyService: DiplomacyService;
     let brain: BotBrainService;
+    let gameLocked: boolean;
+    let delays: number;
 
     const fakeEventService: any = {
         createPlayerDiplomacyStatusChanged: async () => {},
@@ -51,7 +57,7 @@ describe("botBrain", () => {
         },
     };
 
-    const createBrain = (withLlm: boolean) => {
+    const createBrain = (withLlm: boolean, onDelay: () => void = () => {}) => {
         const llm: any = {
             name: "fake",
             generateJson: async (request) => {
@@ -112,7 +118,18 @@ describe("botBrain", () => {
             new GameTypeService(),
             withLlm ? llm : null,
             async () => game,
-            async () => {},
+            async () => {
+                delays++;
+                onDelay();
+            },
+            async (_gameId, work) => {
+                if (gameLocked) {
+                    return false;
+                }
+
+                await work();
+                return true;
+            },
         );
     };
 
@@ -173,6 +190,8 @@ describe("botBrain", () => {
         repoUpdates = [];
         llmResponses = [];
         llmRequests = [];
+        gameLocked = false;
+        delays = 0;
     });
 
     const status = () =>
@@ -273,5 +292,257 @@ describe("botBrain", () => {
         );
 
         expect(sent.length).toBe(0);
+    });
+
+    describe("malformed LLM answers", () => {
+        const reply = () =>
+            brain.replyToConversation(
+                GAME_ID,
+                DM_ID,
+                fakeEventService,
+                {} as any,
+            );
+        const strategy = () =>
+            brain.playStrategyTurns(GAME_ID, fakeEventService, {} as any);
+
+        for (const [name, answer] of [
+            ["a string", "Sure, let's be allies!"],
+            ["null", null],
+            ["an array", [{ reply: "hi" }]],
+            ["an empty reply", { reply: "  ", action: "ally", memoryNote: "" }],
+            ["a non-string reply", { reply: 42, action: "ally" }],
+        ] as [string, unknown][]) {
+            it(`should fall back to rules when the chat answer is ${name}`, async () => {
+                brain = createBrain(true);
+                llmResponses.push(answer);
+
+                await reply();
+
+                expect(sent.length).toBe(1);
+                expect(sent[0].message).not.toBe("hi");
+                expect(bot.aiPersona.notes.length).toBe(0);
+            });
+        }
+
+        it("should ignore an unknown chat action but still reply", async () => {
+            brain = createBrain(true);
+            llmResponses.push({
+                reply: "Perhaps.",
+                action: "nukeEverything",
+                memoryNote: { secret: true },
+            });
+
+            await reply();
+
+            expect(sent.map((m) => m.message)).toEqual(["Perhaps."]);
+            expect(status().statusTo).toBe("neutral");
+            expect(bot.aiPersona.notes.length).toBe(0);
+        });
+
+        it("should use up the cycle without acting when the strategy answer is not an object", async () => {
+            brain = createBrain(true);
+            llmResponses.push("I will ally with Hero.");
+
+            await strategy();
+
+            expect(sent.length).toBe(0);
+            expect(status().statusTo).toBe("neutral");
+            expect(bot.aiPersona.lastStrategyCycle).toBe(1);
+        });
+
+        it("should skip strategy fields with the wrong shape", async () => {
+            brain = createBrain(true);
+            llmResponses.push({
+                plan: 7,
+                actions: { target: "Hero", action: "ally" },
+                messages: "Hello everyone",
+            });
+
+            await strategy();
+
+            expect(sent.length).toBe(0);
+            expect(status().statusTo).toBe("neutral");
+            expect(bot.aiPersona.lastStrategyCycle).toBe(1);
+            expect(bot.aiPersona.notes.length).toBe(0);
+        });
+
+        it("should keep only valid strategy actions and messages", async () => {
+            brain = createBrain(true);
+            llmResponses.push({
+                plan: "Keep everyone guessing.",
+                actions: [
+                    null,
+                    { target: 5, action: "ally" },
+                    { target: "Hero", action: "launchNukes" },
+                    { target: "Nobody", action: "declareWar" },
+                    { target: "Hero", action: "declareWar" },
+                ],
+                messages: [
+                    "stray text",
+                    { to: "Hero", text: null },
+                    { to: null, text: "Hello" },
+                    { to: "Hero", text: "Watch your borders." },
+                ],
+            });
+
+            await strategy();
+
+            expect(status().statusTo).toBe("enemies");
+            expect(sent.map((m) => m.message)).toEqual(["Watch your borders."]);
+        });
+
+        it("should parse decisions defensively", () => {
+            expect(parseChatDecision(undefined)).toBeNull();
+            expect(parseChatDecision({})).toEqual({
+                reply: "",
+                action: "none",
+                memoryNote: "",
+            });
+            expect(parseStrategyDecision({ plan: "x" })).toEqual({
+                plan: "x",
+                actions: [],
+                messages: [],
+            });
+        });
+    });
+
+    describe("strategy turns and game ticks", () => {
+        it("should not apply anything while a tick holds the game lock", async () => {
+            brain = createBrain(true);
+            gameLocked = true;
+            llmResponses.push({
+                plan: "Ally Hero.",
+                actions: [{ target: "Hero", action: "ally" }],
+                messages: [],
+            });
+
+            await brain.playStrategyTurns(GAME_ID, fakeEventService, {} as any);
+
+            expect(status().statusTo).toBe("neutral");
+            expect(bot.aiPersona.lastStrategyCycle).toBe(0);
+        });
+
+        it("should drop plans made for a cycle that has already ended", async () => {
+            brain = createBrain(true);
+            const llm: any = brain.llmProvider;
+            const generate = llm.generateJson;
+            llm.generateJson = async (request) => {
+                const answer = await generate(request);
+                game.state.productionTick = 2; // a tick ran during the LLM call
+                return answer;
+            };
+            llmResponses.push({
+                plan: "Ally Hero.",
+                actions: [{ target: "Hero", action: "ally" }],
+                messages: [],
+            });
+
+            await brain.playStrategyTurns(GAME_ID, fakeEventService, {} as any);
+
+            expect(status().statusTo).toBe("neutral");
+            expect(bot.aiPersona.lastStrategyCycle).toBe(0);
+        });
+
+        it("should treat every tick as a new cycle when cycles are one tick long", () => {
+            brain = createBrain(false);
+            game.settings.galaxy.productionTicks = 1;
+
+            const ctx = brain.botDiplomacyService.createContext(
+                game,
+                fakeEventService,
+                {} as any,
+                false,
+            );
+
+            expect(ctx!.isFirstTickOfCycle).toBeTrue();
+        });
+    });
+
+    describe("chat timing", () => {
+        it("should answer a message sent while the bot was still replying", async () => {
+            let firstDelay = true;
+            brain = createBrain(false, () => {
+                if (firstDelay) {
+                    firstDelay = false;
+                    // The second message arrives while the bot is "typing".
+                    brain.onHumanMessage(
+                        GAME_ID,
+                        DM_ID,
+                        fakeEventService,
+                        {} as any,
+                    );
+                }
+            });
+
+            const fakeConversationService: any =
+                brain.botDiplomacyService.conversationService;
+            fakeConversationService.sendToConversation = async (
+                g,
+                player,
+                convo,
+                message,
+            ) => {
+                sent.push({ from: player._id, convo, message });
+                convo.messages.push({
+                    fromPlayerId: player._id,
+                    fromPlayerAlias: player.alias,
+                    message,
+                    sentTick: 12,
+                });
+
+                if (sent.length === 1) {
+                    convo.messages.push({
+                        fromPlayerId: "human",
+                        fromPlayerAlias: "Hero",
+                        message: "Well? Do we have a deal?",
+                        sentTick: 12,
+                    });
+                }
+            };
+
+            await brain.onHumanMessage(
+                GAME_ID,
+                DM_ID,
+                fakeEventService,
+                {} as any,
+            );
+
+            expect(sent.length).toBe(2);
+        });
+
+        it("should wait for a running tick before replying", async () => {
+            game.state.locked = true;
+            brain = createBrain(false, () => {
+                game.state.locked = false;
+            });
+
+            await brain.replyToConversation(
+                GAME_ID,
+                DM_ID,
+                fakeEventService,
+                {} as any,
+            );
+
+            expect(delays).toBe(1);
+            expect(sent.length).toBe(1);
+        });
+    });
+
+    describe("single player game limit", () => {
+        it("should refuse a fourth single player game in progress", async () => {
+            const service: any = Object.create(GameCreateService.prototype);
+            let count = 2;
+            service.gameListService = {
+                countInProgressSinglePlayerGamesCreatedByUser: async () =>
+                    count,
+            };
+
+            await service._validateUserCanCreateSinglePlayerGame("user1");
+
+            count = 3;
+            await expectAsync(
+                service._validateUserCanCreateSinglePlayerGame("user1"),
+            ).toBeRejectedWithError(/at most 3 single player games/);
+        });
     });
 });

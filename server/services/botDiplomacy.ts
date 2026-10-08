@@ -172,8 +172,11 @@ export default class BotDiplomacyService {
             strengths,
             leader,
             starsForVictory: game.state.starsForVictory,
+            // 1 % productionTicks makes every tick the first of its cycle when a
+            // cycle is a single tick long.
             isFirstTickOfCycle:
-                game.state.tick % game.settings.galaxy.productionTicks === 1,
+                game.state.tick % game.settings.galaxy.productionTicks ===
+                1 % game.settings.galaxy.productionTicks,
             conversations: game.conversations.slice(),
         };
     }
