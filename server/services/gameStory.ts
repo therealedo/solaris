@@ -10,7 +10,7 @@ import type {
 } from "@solaris/common";
 import { ValidationError } from "@solaris/common";
 import { getAgenda } from "./botAgendas";
-import { getPersona } from "./botPersonas";
+import { getBotPersona } from "./botPersonas";
 import { DBObjectId } from "./types/DBObjectId";
 import { Game } from "./types/Game";
 import { Player } from "./types/Player";
@@ -288,7 +288,7 @@ export function buildStoryOpponents(params: {
         .filter((p) => !p.userId && p.aiPersona)
         .map((bot) => {
             const botId = id(bot._id);
-            const persona = getPersona(bot.aiPersona!.key);
+            const persona = getBotPersona(bot.aiPersona);
             const agenda = bot.aiPersona!.agenda ?? null;
             const definition = getAgenda(agenda?.key);
             const targetId = agenda?.targetPlayerId

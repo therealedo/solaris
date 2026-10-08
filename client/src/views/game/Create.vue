@@ -312,6 +312,9 @@
               {{ opt.text }}
             </option>
           </select>
+          <small v-if="suggestedDifficulty" class="text-muted"
+            >Suggested from your record against the bots.</small
+          >
         </div>
 
         <div class="mb-2" v-if="botCount > 0">
@@ -2669,6 +2672,7 @@ import {
 import CustomGalaxy from "@/views/game/gameCreation/CustomGalaxy.vue";
 import ResearchCostProgression from "@/views/game/gameCreation/ResearchCostProgression.vue";
 import AiOpponentPicker from "@/views/game/gameCreation/AiOpponentPicker.vue";
+import { getSinglePlayerRecord } from "@/services/typedapi/user";
 
 import { useToast } from "vue-toast-notification";
 const httpClient = inject(httpInjectionKey)!;
@@ -2724,6 +2728,8 @@ const withAiDefaults = (s: GameSettingsSpec) => {
   s.general.aiOpponentChoices ??= [];
   return s;
 };
+
+const suggestedDifficulty = ref<string | null>(null);
 
 // AI opponents with personas: every other slot in single player.
 const botCount = computed(() =>
@@ -2888,6 +2894,16 @@ onMounted(async () => {
     settings.value = withAiDefaults(response.data);
   } else {
     console.error(formatError(response));
+  }
+
+  // Start single player games at the difficulty your record against the bots suggests.
+  if (isSinglePlayer.value && settings.value) {
+    const record = await getSinglePlayerRecord(httpClient)();
+
+    if (isOk(record) && record.data.suggestedDifficulty) {
+      settings.value.general.aiDifficulty = record.data.suggestedDifficulty;
+      suggestedDifficulty.value = record.data.suggestedDifficulty;
+    }
   }
 });
 </script>
