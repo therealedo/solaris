@@ -31,6 +31,24 @@ import { TechnologyService } from "@solaris/common";
 import { StarDataService } from "@solaris/common";
 import { IEventService } from "./types/IEventService";
 import { IStatisticsService } from "./types/IStatisticsService";
+import { GameTypeService } from "@solaris/common";
+import ScanningService from "./scanning";
+import SpecialistService from "./specialist";
+import SpecialistBanService from "./specialistBan";
+import SpecialistHireService from "./specialistHire";
+import {
+    BotVisibility,
+    estimateHiddenGarrison,
+    isPersonaBot,
+} from "./botVisibility";
+import { chooseBotResearch } from "./botResearch";
+import {
+    getSpecialistBudget,
+    getSpecialistPreferences,
+    HIRE_CHANCE,
+    pickSpecialistHire,
+    SpecialistOption,
+} from "./botSpecialists";
 
 const Heap = require("qheap");
 
@@ -115,6 +133,10 @@ interface Context {
     playerShips: number;
     transitFromCarriers: Map<string, Carrier[]>;
     arrivingAtCarriers: Map<string, Carrier[]>;
+    // What a persona bot can see, null for AI that plays with full knowledge.
+    visibility: BotVisibility | null;
+    // Largest garrison a persona bot can see on each other empire's stars.
+    knownEnemyGarrisons: Map<string, number>;
 }
 
 interface Assignment {
@@ -162,6 +184,11 @@ export default class AIService {
     starDataService: StarDataService;
     statisticsService: IStatisticsService;
     infrastructureCostService: InfrastructureCostService<DBObjectId>;
+    scanningService: ScanningService;
+    gameTypeService: GameTypeService;
+    specialistService: SpecialistService;
+    specialistBanService: SpecialistBanService;
+    specialistHireService: SpecialistHireService;
 
     constructor(
         starUpgradeService: StarUpgradeService,
@@ -184,6 +211,11 @@ export default class AIService {
         starDataService: StarDataService,
         statisticsService: IStatisticsService,
         infrastructureCostService: InfrastructureCostService<DBObjectId>,
+        scanningService: ScanningService,
+        gameTypeService: GameTypeService,
+        specialistService: SpecialistService,
+        specialistBanService: SpecialistBanService,
+        specialistHireService: SpecialistHireService,
     ) {
         this.starUpgradeService = starUpgradeService;
         this.carrierService = carrierService;
@@ -205,6 +237,11 @@ export default class AIService {
         this.starDataService = starDataService;
         this.statisticsService = statisticsService;
         this.infrastructureCostService = infrastructureCostService;
+        this.scanningService = scanningService;
+        this.gameTypeService = gameTypeService;
+        this.specialistService = specialistService;
+        this.specialistBanService = specialistBanService;
+        this.specialistHireService = specialistHireService;
     }
 
     isAIControlled(player: Player) {
@@ -241,6 +278,13 @@ export default class AIService {
                     isFirstTickOfCycle,
                     isLastTickOfCycle,
                 );
+            }
+
+            // AI opponents with a persona pick their own research and hire
+            // specialists once a cycle, after the normal spending.
+            if (isFirstTickOfCycle && isPersonaBot(player)) {
+                this._choosePersonaResearch(game, player);
+                await this._hirePersonaSpecialist(game, player);
             }
         } catch (e) {
             log.error(
@@ -469,7 +513,22 @@ export default class AIService {
             starsById.set(star._id.toString(), star);
         }
 
-        const traversableStars = game.galaxy.stars.filter(
+        // Persona bots only plan with what a human in their seat could see.
+        const visibility = isPersonaBot(player)
+            ? this._createBotVisibility(game, player)
+            : null;
+        const knownStars = visibility
+            ? game.galaxy.stars.filter((star) =>
+                  visibility.isStarKnown(star._id.toString()),
+              )
+            : game.galaxy.stars;
+        const visibleCarriers = visibility
+            ? game.galaxy.carriers.filter((carrier) =>
+                  visibility.isCarrierVisible(carrier._id.toString()),
+              )
+            : game.galaxy.carriers;
+
+        const traversableStars = knownStars.filter(
             (star) =>
                 !star.ownedByPlayerId ||
                 star.ownedByPlayerId.toString() === playerId,
@@ -480,7 +539,7 @@ export default class AIService {
             game,
             player,
             playerStars,
-            game.galaxy.stars,
+            knownStars,
             this._getHyperspaceRangeExternal(game, player),
         );
         // All stars (belonging to anyone) that can reach a player star (with our players range)
@@ -488,7 +547,7 @@ export default class AIService {
             starsById,
             game,
             player,
-            game.galaxy.stars,
+            knownStars,
             playerStars,
             this._getHyperspaceRangeExternal(game, player),
         );
@@ -525,7 +584,7 @@ export default class AIService {
             game,
             player,
             playerStars,
-            game.galaxy.stars,
+            knownStars,
             this._getGlobalHighestHyperspaceRange(game),
         );
 
@@ -553,7 +612,7 @@ export default class AIService {
 
         const carriersOrbiting = new Map<string, Carrier[]>();
 
-        for (const carrier of game.galaxy.carriers) {
+        for (const carrier of visibleCarriers) {
             if (
                 (!carrier.waypoints || carrier.waypoints.length === 0) &&
                 carrier.orbiting
@@ -574,7 +633,7 @@ export default class AIService {
         }
 
         // Enemy carriers that are in transition to one of our stars
-        const incomingCarriers = game.galaxy.carriers
+        const incomingCarriers = visibleCarriers
             .filter(
                 (carrier) =>
                     this._isEnemyPlayer(
@@ -692,7 +751,131 @@ export default class AIService {
             ),
             transitFromCarriers,
             arrivingAtCarriers,
+            visibility,
+            knownEnemyGarrisons: visibility
+                ? this._findKnownEnemyGarrisons(knownStars, player, visibility)
+                : new Map(),
         };
+    }
+
+    _createBotVisibility(game: Game, player: Player): BotVisibility {
+        const scanned = this.scanningService.calculateViewpointScanning(game, [
+            player,
+        ]);
+        const playerId = player._id.toString();
+
+        const scannedStarIds = new Set<string>();
+        const extraKnownStarIds = new Set<string>();
+        const visibleCarrierIds = new Set<string>();
+        const hiddenShipIds = new Set<string>();
+
+        for (const star of scanned.stars) {
+            const starId = star._id.toString();
+
+            // Worm hole ends are shown on the map but aren't in scanning range.
+            if (scanned.unscannedWormHoles.has(star)) {
+                extraKnownStarIds.add(starId);
+                continue;
+            }
+
+            scannedStarIds.add(starId);
+
+            if (!this.starService.canPlayersSeeStarShips(star, [player._id])) {
+                hiddenShipIds.add(starId);
+            }
+        }
+
+        for (const carrier of scanned.carriers) {
+            const carrierId = carrier._id.toString();
+
+            visibleCarrierIds.add(carrierId);
+
+            if (
+                !this.carrierService.canPlayersSeeCarrierShips(
+                    game,
+                    [player],
+                    carrier,
+                )
+            ) {
+                hiddenShipIds.add(carrierId);
+            }
+
+            // Like a human, the bot knows where its own carriers are heading.
+            if (
+                carrier.ownedByPlayerId?.toString() === playerId &&
+                carrier.waypoints.length
+            ) {
+                extraKnownStarIds.add(
+                    carrier.waypoints[0].destination.toString(),
+                );
+            }
+        }
+
+        return new BotVisibility(
+            scannedStarIds,
+            extraKnownStarIds,
+            visibleCarrierIds,
+            hiddenShipIds,
+            this.gameTypeService.isDarkMode(game) ||
+                this.gameTypeService.isDarkFogged(game),
+        );
+    }
+
+    _findKnownEnemyGarrisons(
+        knownStars: Star[],
+        player: Player,
+        visibility: BotVisibility,
+    ): Map<string, number> {
+        const garrisons = new Map<string, number>();
+        const playerId = player._id.toString();
+
+        for (const star of knownStars) {
+            const ownerId = star.ownedByPlayerId?.toString();
+
+            if (
+                !ownerId ||
+                ownerId === playerId ||
+                !visibility.canSeeStarShips(star._id.toString())
+            ) {
+                continue;
+            }
+
+            garrisons.set(
+                ownerId,
+                Math.max(garrisons.get(ownerId) ?? 0, star.ships || 0),
+            );
+        }
+
+        return garrisons;
+    }
+
+    // The ships a bot believes are on a star: the real number for AI with full knowledge
+    // or when the bot can see them, otherwise a cautious guess.
+    _getKnownStarShips(context: Context, star: Star): number {
+        const visibility = context.visibility;
+
+        if (!visibility || visibility.canSeeStarShips(star._id.toString())) {
+            return star.shipsActual || 0;
+        }
+
+        return this._estimateHiddenShips(context, star.ownedByPlayerId);
+    }
+
+    _estimateHiddenShips(
+        context: Context,
+        ownerId: DBObjectId | null | undefined,
+    ): number {
+        const ownLargestGarrison = context.playerStars.reduce(
+            (max, s) => Math.max(max, s.ships || 0),
+            0,
+        );
+
+        return estimateHiddenGarrison(
+            ownerId
+                ? context.knownEnemyGarrisons.get(ownerId.toString())
+                : undefined,
+            ownLargestGarrison,
+        );
     }
 
     _constructBorderStarData(
@@ -1457,18 +1640,30 @@ export default class AIService {
                 starToInvade,
                 true,
             );
+        const visibility = context.visibility;
         const shipsOnCarriers = defendingCarriers.reduce(
-            (sum, c) => sum + (c.ships || 0),
+            (sum, c) =>
+                sum +
+                (!visibility || visibility.canSeeCarrierShips(c._id.toString())
+                    ? c.ships || 0
+                    : this._estimateHiddenShips(context, c.ownedByPlayerId)),
             0,
         );
-        const shipsProduced = this.shipService.calculateStarShipsByTicks(
-            techLevel.manufacturing,
-            starToInvade.infrastructure.industry || 0,
-            ticksToArrival,
-            game.settings.galaxy.productionTicks,
-        );
+        // A persona bot can't see the industry of stars outside its scanning range,
+        // the cautious garrison estimate covers their production.
+        const shipsProduced =
+            !visibility || visibility.canSeeStarDetails(starToInvade)
+                ? this.shipService.calculateStarShipsByTicks(
+                      techLevel.manufacturing,
+                      starToInvade.infrastructure.industry || 0,
+                      ticksToArrival,
+                      game.settings.galaxy.productionTicks,
+                  )
+                : 0;
         const shipsAtArrival =
-            (starToInvade.shipsActual || 0) + shipsOnCarriers + shipsProduced;
+            this._getKnownStarShips(context, starToInvade) +
+            shipsOnCarriers +
+            shipsProduced;
 
         return this.combatService.calculateBasic(
             {
@@ -1656,7 +1851,12 @@ export default class AIService {
                 if (this._isEnemyStar(game, player, context, star)) {
                     // We adjust the stores by distance, so closer stars end up with a higher score.
                     // This stops the AI from jumping behind the enemies frontlines too often and leaving closer stars uninvaded and open for counter attacks.
-                    const starScore = this._getStarScore(star);
+                    // Persona bots can't see the infrastructure of stars outside scanning range.
+                    const starScore =
+                        !context.visibility ||
+                        context.visibility.canSeeStarDetails(star)
+                            ? this._getStarScore(star)
+                            : 1;
                     const distance =
                         this.distanceService.getDistanceBetweenLocations(
                             fromStar.location,
@@ -1722,7 +1922,11 @@ export default class AIService {
                     used.add(candidateId);
 
                     let score = 1;
-                    if (candidate.naturalResources) {
+                    if (
+                        candidate.naturalResources &&
+                        (!context.visibility ||
+                            context.visibility.canSeeStarDetails(candidate))
+                    ) {
                         score =
                             candidate.naturalResources.economy +
                             candidate.naturalResources.industry +
@@ -1818,7 +2022,9 @@ export default class AIService {
             let priority = 0;
 
             for (const star of reachedByHostiles) {
-                priority += star.ships || 0;
+                priority += context.visibility
+                    ? this._getKnownStarShips(context, star)
+                    : star.ships || 0;
             }
 
             starPriorities.set(starId, priority);
@@ -2129,6 +2335,192 @@ export default class AIService {
         });
 
         return starGraph;
+    }
+
+    // Whether a persona bot is fighting: under attack or set on an enemy by its plan.
+    _isPersonaAtWar(player: Player): boolean {
+        return (
+            Boolean(player.aiPersona?.focusPlayerId) ||
+            Boolean(player.aiState?.knownAttacks?.length)
+        );
+    }
+
+    _choosePersonaResearch(game: Game, player: Player) {
+        const researchable =
+            this.technologyService.getResearchableTechnologies(game);
+        const atWar = this._isPersonaAtWar(player);
+        const choose = () =>
+            chooseBotResearch(
+                player.aiPersona?.key,
+                researchable,
+                atWar,
+                Math.random,
+            );
+
+        const next = choose();
+
+        if (!next) {
+            return;
+        }
+
+        player.researchingNext = next;
+
+        // Steer the current research too at the start of the game, or if it can't be researched.
+        const isFirstCycle =
+            game.state.tick <= game.settings.galaxy.productionTicks;
+
+        if (isFirstCycle || !researchable.includes(player.researchingNow)) {
+            player.researchingNow = choose() ?? next;
+        }
+    }
+
+    async _hirePersonaSpecialist(game: Game, player: Player) {
+        if (
+            game.settings.specialGalaxy.specialistCost === "none" ||
+            Math.random() >= HIRE_CHANCE
+        ) {
+            return;
+        }
+
+        const currency = game.settings.specialGalaxy.specialistsCurrency;
+        const funds =
+            currency === "credits" ? player.credits : player.creditsSpecialists;
+        const budget = getSpecialistBudget(currency, funds || 0);
+
+        if (budget <= 0) {
+            return;
+        }
+
+        const star = this._findSpecialistStar(game, player);
+        const carrier = this._findSpecialistCarrier(game, player);
+
+        const available: SpecialistOption[] = [
+            ...this.specialistService
+                .listStar(game)
+                .filter(
+                    (s) =>
+                        !this.specialistBanService.isStarSpecialistBanned(
+                            game,
+                            s.id,
+                        ),
+                )
+                .map((s) => ({
+                    kind: "star" as const,
+                    id: s.id,
+                    cost: this.specialistService.getSpecialistActualCost(
+                        game,
+                        s,
+                    )[currency],
+                })),
+            ...this.specialistService
+                .listCarrier(game)
+                .filter(
+                    (s) =>
+                        !this.specialistBanService.isCarrierSpecialistBanned(
+                            game,
+                            s.id,
+                        ),
+                )
+                .map((s) => ({
+                    kind: "carrier" as const,
+                    id: s.id,
+                    cost: this.specialistService.getSpecialistActualCost(
+                        game,
+                        s,
+                    )[currency],
+                })),
+        ];
+
+        const choice = pickSpecialistHire(
+            getSpecialistPreferences(
+                player.aiPersona?.key,
+                this._isPersonaAtWar(player),
+            ),
+            available,
+            budget,
+            { star: star != null, carrier: carrier != null },
+            Math.random,
+        );
+
+        if (!choice) {
+            return;
+        }
+
+        // The hire service still validates the hire; a refused hire is simply skipped.
+        try {
+            if (choice.kind === "star") {
+                await this.specialistHireService.hireStarSpecialist(
+                    game,
+                    player,
+                    star!._id,
+                    choice.id,
+                    this.statisticsService,
+                    false,
+                );
+            } else {
+                await this.specialistHireService.hireCarrierSpecialist(
+                    game,
+                    player,
+                    carrier!._id,
+                    choice.id,
+                    this.statisticsService,
+                    false,
+                );
+            }
+        } catch (e) {
+            log.warn(`AI could not hire specialist ${choice.id}: ${e}`);
+        }
+    }
+
+    // The bot's home star, or failing that its most developed star, without a specialist.
+    _findSpecialistStar(game: Game, player: Player): Star | null {
+        const stars = this.starService
+            .listStarsOwnedByPlayer(game.galaxy.stars, player._id)
+            .filter(
+                (s) => !s.specialistId && !this.starDataService.isDeadStar(s),
+            );
+
+        const homeStar = stars.find(
+            (s) => s._id.toString() === player.homeStarId?.toString(),
+        );
+
+        if (homeStar) {
+            return homeStar;
+        }
+
+        return stars.reduce<Star | null>(
+            (best, s) =>
+                !best || this._getStarScore(s) > this._getStarScore(best)
+                    ? s
+                    : best,
+            null,
+        );
+    }
+
+    // The bot's largest carrier without a specialist in orbit of one of its own stars.
+    _findSpecialistCarrier(game: Game, player: Player): Carrier | null {
+        const carriers = this.carrierService
+            .listCarriersOwnedByPlayer(game.galaxy.carriers, player._id)
+            .filter((c) => {
+                if (c.specialistId || !c.orbiting) {
+                    return false;
+                }
+
+                const star = this.starService.getById(game, c.orbiting);
+
+                return (
+                    star != null &&
+                    star.ownedByPlayerId?.toString() ===
+                        player._id.toString() &&
+                    !this.starDataService.isDeadStar(star)
+                );
+            });
+
+        return carriers.reduce<Carrier | null>(
+            (best, c) =>
+                !best || (c.ships || 0) > (best.ships || 0) ? c : best,
+            null,
+        );
     }
 
     getStarName(context: Context, starId: string) {

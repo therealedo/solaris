@@ -673,6 +673,11 @@ export default (
         starDataService,
         statisticsService,
         infrastructureCostService,
+        scanningService,
+        gameTypeService,
+        specialistService,
+        specialistBanService,
+        specialistHireService,
     );
     const battleRoyaleService = new BattleRoyaleService(
         starService,
