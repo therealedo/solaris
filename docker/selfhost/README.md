@@ -93,6 +93,23 @@ betrayal, an attack on their home world), at most twice per cycle each. Set
 `LLM_REVIEW_REPLIES=true` in `.env` to have a second Gemini request double check chat
 replies that change diplomacy; it uses more of the free quota.
 
+**Playing at your own pace.** In a turn-based single player game, set **Max Turn Wait** to
+**Unlimited**: the next turn comes only when you press ready, however long you take.
+
+**Choosing your opponents.** The create page lets you pick each bot's persona, name and
+avatar, or a **completely random persona** made up for that bot (always a player who wants
+to win, never a troll). Save a line-up as your favourite lobby to reuse it. Single player
+difficulty starts at what your record suggests; your record is on your achievements page,
+and the end of a game has a **Story of the Game** with every bot's secret plan.
+
+**Bots that act like people.** With **AI Online Hours** on, each bot lives in its own time
+zone: it sleeps at night and is busy part of the day, answers when it's back, and its online
+status matches (with Player Online Status visible). Bots see only what their scanners show,
+research and hire specialists to suit their persona, give up when badly beaten (going quiet,
+surrendering and paying tribute, or quitting), rally everyone against a player close to
+winning, vote to end a decided game, ask for credits you owe them in the ledger, and talk
+to their team in team games.
+
 **Updating** after new commits: `git pull` and run the same `up -d --build` command.
 
 **Things to know**

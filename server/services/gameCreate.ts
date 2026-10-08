@@ -275,10 +275,16 @@ export default class GameCreateService {
         if (isTutorial) {
             this._setupTutorialPlayers(game);
         } else if (isSinglePlayer) {
-            await this._setupSinglePlayerPlayers(game);
+            await this._setupSinglePlayerPlayers(
+                game,
+                settings.general.aiOpponentChoices,
+            );
             this.conversationService.createConversationAllPlayers(game);
         } else {
-            this._setupAiOpponentSlots(game);
+            this._setupAiOpponentSlots(
+                game,
+                settings.general.aiOpponentChoices,
+            );
             this.conversationService.createConversationAllPlayers(game);
         }
 
@@ -748,7 +754,10 @@ export default class GameCreateService {
         this.gameJoinService.assignNonUserPlayersToAI(game);
     }
 
-    async _setupSinglePlayerPlayers(game: Game) {
+    async _setupSinglePlayerPlayers(
+        game: Game,
+        choices: AiOpponentChoice[] = [],
+    ) {
         // Put the creator into the first slot and hand every other slot to the AI.
         // Assigning the only human player starts the game straight away.
         const userId = game.settings.general.createdByUserId!;
@@ -767,13 +776,19 @@ export default class GameCreateService {
         this._giveBotsPersonas(
             game,
             game.galaxy.players.filter((p) => !p.userId),
+            choices,
         );
     }
 
     // In a game with several humans, hands random slots to AI opponents with personas
     // before anyone joins. Those slots stay closed and the game starts once the humans
     // fill the rest.
-    _setupAiOpponentSlots(game: Game) {
+    _setupAiOpponentSlots(
+        game: Game,
+        // Kept out of the saved settings, so passed in separately.
+        choices: AiOpponentChoice[] = game.settings.general.aiOpponentChoices ??
+            [],
+    ) {
         const count = game.settings.general.aiOpponents ?? 0;
 
         if (count <= 0) {
@@ -790,7 +805,7 @@ export default class GameCreateService {
         const bots = slots.slice(0, count);
 
         this.gameJoinService.assignNonUserPlayersToAI(game, false, bots);
-        this._giveBotsPersonas(game, bots);
+        this._giveBotsPersonas(game, bots, choices);
 
         bots.forEach((bot) => {
             bot.ready = true;
@@ -799,8 +814,7 @@ export default class GameCreateService {
 
     // Personas for the bots, with any persona, name and avatar the creator picked.
     // The picks aren't kept in the settings, where other players could read them.
-    _giveBotsPersonas(game: Game, bots: Player[]) {
-        const choices = game.settings.general.aiOpponentChoices ?? [];
+    _giveBotsPersonas(game: Game, bots: Player[], choices: AiOpponentChoice[]) {
         const personas = createPersonaStates(
             bots.length,
             Math.random,
