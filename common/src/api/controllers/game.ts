@@ -22,6 +22,7 @@ import type {
     GameUserNotification,
 } from "../../types/common/game";
 import { type Tutorial } from "../../types/common/tutorial";
+import { type GameStory } from "../../types/common/gameStory";
 import { type PlayerResearch } from "../../types/common/player";
 import { type PlayerStatistics } from "../../types/common/leaderboard";
 import { type UserRoles } from "../../types/common/user";
@@ -224,6 +225,9 @@ export const createGameRoutes = <ID>() => ({
     ),
     getStatistics: new GetRoute<{ gameId: ID; playerId: ID }, {}, Statistics>(
         "/api/game/:gameId/statistics/:playerId",
+    ),
+    getStory: new GetRoute<{ gameId: ID }, {}, GameStory<ID>>(
+        "/api/game/:gameId/story",
     ),
     delete: new DeleteRoute<{ gameId: ID }, {}, {}>("/api/game/:gameId"),
     resetQuitters: new DeleteRoute<{ gameId: string }, {}, null>(

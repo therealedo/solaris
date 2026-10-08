@@ -31,3 +31,4 @@ database_data
 mise.toml
 
 stats.html
+docker/selfhost/.env

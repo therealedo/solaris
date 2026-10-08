@@ -34,7 +34,7 @@ import GameCreateService from "./gameCreate";
 import GameGalaxyService from "./gameGalaxy";
 import GameListService from "./gameList";
 import GameTickService from "./gameTick";
-import { GameTypeService } from "@solaris/common";
+import { GameTypeService, LedgerType } from "@solaris/common";
 import GameStateService from "./gameState";
 import BattleRoyaleService from "./battleRoyale";
 import MapService from "./map";
@@ -64,6 +64,9 @@ import ConversationService from "./conversation";
 import ReputationService from "./reputation";
 import BasicAIService from "./basicAi";
 import AIService from "./ai";
+import BotDiplomacyService from "./botDiplomacy";
+import BotBrainService from "./botBrain";
+import { createLlmProvider } from "./llm";
 import GuildService from "./guild";
 import GuildUserService from "./guildUser";
 import StarMovementService from "./starMovement";
@@ -182,6 +185,7 @@ export default (
         userRepository,
         passwordService,
         sessionService,
+        config.everyoneEstablished,
     );
     const adminService = new AdminService(
         userRepository,
@@ -669,6 +673,11 @@ export default (
         starDataService,
         statisticsService,
         infrastructureCostService,
+        scanningService,
+        gameTypeService,
+        specialistService,
+        specialistBanService,
+        specialistHireService,
     );
     const battleRoyaleService = new BattleRoyaleService(
         starService,
@@ -748,6 +757,67 @@ export default (
         starService,
         combatProcessingService,
     );
+    const llmProvider = createLlmProvider(config);
+    const botDiplomacyService = new BotDiplomacyService(
+        diplomacyService,
+        conversationService,
+        reputationService,
+        playerStatisticsService,
+        distanceService,
+        gameTypeService,
+        randomService,
+        llmProvider,
+    );
+    const gameMutexService = new GameMutexService();
+    const botBrainService = new BotBrainService(
+        botDiplomacyService,
+        gameRepository,
+        gameTypeService,
+        llmProvider,
+        (gameId) => gameService.getByIdAll(gameId),
+        undefined,
+        async (gameId, work) => {
+            const lock = await gameMutexService.acquireMutexLock(
+                gameId.toString(),
+            );
+
+            try {
+                if (await gameLockService.isLockedInDatabase(gameId)) {
+                    return false;
+                }
+
+                await work();
+                return true;
+            } finally {
+                if (lock) {
+                    await gameMutexService.releaseMutexLock(lock);
+                }
+            }
+        },
+        {
+            sendCredits: async (ctx, bot, target, amount) => {
+                await tradeService.sendCredits(
+                    ctx.game,
+                    bot,
+                    target._id,
+                    amount,
+                    ctx.eventService,
+                    statisticsService,
+                    ctx.notificationService,
+                );
+            },
+            forgiveDebt: async (ctx, bot, debtor) => {
+                await ledgerService.forgiveDebt(
+                    ctx.game,
+                    bot,
+                    debtor._id,
+                    LedgerType.Credits,
+                    ctx.eventService,
+                );
+            },
+            reviewReplies: config.llm.reviewReplies,
+        },
+    );
     const gameTickService = new GameTickService(
         distanceService,
         starService,
@@ -783,6 +853,7 @@ export default (
         carrierTravelService,
         carrierCombatService,
         combatProcessingService,
+        botDiplomacyService,
     );
     const emailService = new EmailService(
         config,
@@ -859,8 +930,6 @@ export default (
 
     const gamePlayerMutexService = new GamePlayerMutexService();
 
-    const gameMutexService = new GameMutexService();
-
     log.info("Dependency container initialized.");
 
     return {
@@ -897,6 +966,7 @@ export default (
         gameGalaxyService,
         gameListService,
         gameTickService,
+        botBrainService,
         gameTypeService,
         gameStateService,
         guildService,

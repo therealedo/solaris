@@ -1,12 +1,28 @@
 <template>
   <view-container :is-auth-page="true">
-    <view-title title="Create Game" />
+    <view-title
+      :title="isSinglePlayer ? 'Create Single Player Game' : 'Create Game'"
+    />
     <loading-spinner :loading="!settings || isCreatingGame" />
 
     <select-template @onSelectTemplate="loadSettingsFromTemplate" />
 
     <form @submit.prevent="handleSubmit" v-if="settings">
       <view-collapse-panel title="Game Settings" :startsOpened="true">
+        <div class="mb-2 form-check">
+          <input
+            type="checkbox"
+            class="form-check-input"
+            id="singlePlayer"
+            v-model="isSinglePlayer"
+            :disabled="isCreatingGame"
+          />
+          <label for="singlePlayer" class="form-check-label"
+            >Single player against AI
+            <help-tooltip
+              tooltip="Play alone against AI opponents. Every other slot is filled by an AI and the game starts immediately. Single player games are private and do not count towards rank or achievements."
+          /></label>
+        </div>
         <div class="mb-2">
           <label for="name" class="col-form-label"
             >Name
@@ -37,7 +53,7 @@
             v-model="settings.general.description"
           ></textarea>
         </div>
-        <div class="mb-2">
+        <div class="mb-2" v-if="!isSinglePlayer">
           <label for="password" class="col-form-label"
             >Password
             <help-tooltip
@@ -250,6 +266,85 @@
             </option>
           </select>
         </div>
+
+        <div class="mb-2" v-if="!isSinglePlayer">
+          <label for="aiOpponents" class="col-form-label"
+            >AI Opponents
+            <help-tooltip
+              tooltip="Slots given to AI opponents with their own personalities. They chat, ally and betray like players. The game starts when humans fill the remaining slots."
+          /></label>
+          <select
+            class="form-select"
+            id="aiOpponents"
+            v-model="settings.general.aiOpponents"
+            :disabled="isCreatingGame"
+          >
+            <option
+              v-for="opt in aiOpponentOptions"
+              v-bind:key="opt"
+              v-bind:value="opt"
+            >
+              {{ opt === 0 ? "None" : `${opt} AI opponents` }}
+            </option>
+          </select>
+        </div>
+
+        <div
+          class="mb-2"
+          v-if="isSinglePlayer || (settings.general.aiOpponents ?? 0) > 0"
+        >
+          <label for="aiDifficulty" class="col-form-label"
+            >AI Difficulty
+            <help-tooltip
+              tooltip="How strong AI opponents play compared to the human players. Bots earn more or fewer credits each cycle to stay at that level, so they keep pace with you instead of using fixed bonuses."
+          /></label>
+          <select
+            class="form-select"
+            id="aiDifficulty"
+            v-model="settings.general.aiDifficulty"
+            :disabled="isCreatingGame"
+          >
+            <option
+              v-for="opt in options.general.aiDifficulty"
+              v-bind:key="opt.value"
+              v-bind:value="opt.value"
+            >
+              {{ opt.text }}
+            </option>
+          </select>
+          <small v-if="suggestedDifficulty" class="text-muted"
+            >Suggested from your record against the bots.</small
+          >
+        </div>
+
+        <div class="mb-2" v-if="botCount > 0">
+          <label for="aiOnlineHours" class="col-form-label"
+            >AI Online Hours
+            <help-tooltip
+              tooltip="Bots live in their own time zones: they sleep at night and are busy for part of the day, so they answer slowly or only when they're back, like real players. Their online status matches when Player Online Status is visible."
+          /></label>
+          <select
+            class="form-select"
+            id="aiOnlineHours"
+            v-model="settings.general.aiOnlineHours"
+            :disabled="isCreatingGame"
+          >
+            <option
+              v-for="opt in options.general.aiOnlineHours"
+              v-bind:key="opt.value"
+              v-bind:value="opt.value"
+            >
+              {{ opt.text }}
+            </option>
+          </select>
+        </div>
+
+        <ai-opponent-picker
+          v-if="botCount > 0"
+          v-model="settings.general.aiOpponentChoices!"
+          :count="botCount"
+          :disabled="isCreatingGame"
+        />
 
         <div class="mb-2">
           <label for="playerType" class="col-form-label"
@@ -745,7 +840,9 @@
             :disabled="isCreatingGame"
           >
             <option
-              v-for="opt in options.gameTime.maxTurnWait"
+              v-for="opt in options.gameTime.maxTurnWait.filter(
+                (o) => o.value !== 0 || isSinglePlayer,
+              )"
               v-bind:key="opt.value"
               v-bind:value="opt.value"
             >
@@ -2559,6 +2656,7 @@ import FluxBar from "./components/menu/FluxBar.vue";
 import router from "../../router";
 import SelectTemplate from "@/views/game/gameCreation/SelectTemplate.vue";
 import { ref, onMounted, inject, type Ref, computed } from "vue";
+import { useRoute } from "vue-router";
 import {
   GAME_CREATION_OPTIONS,
   type GameSettingsSpec,
@@ -2573,12 +2671,17 @@ import {
 } from "@/services/typedapi";
 import CustomGalaxy from "@/views/game/gameCreation/CustomGalaxy.vue";
 import ResearchCostProgression from "@/views/game/gameCreation/ResearchCostProgression.vue";
+import AiOpponentPicker from "@/views/game/gameCreation/AiOpponentPicker.vue";
+import { getSinglePlayerRecord } from "@/services/typedapi/user";
 
 import { useToast } from "vue-toast-notification";
 const httpClient = inject(httpInjectionKey)!;
 const toast = useToast();
 
+const route = useRoute();
+
 const isCreatingGame = ref(false);
+const isSinglePlayer = ref(route.query.singlePlayer === "true");
 const errors: Ref<string[]> = ref([]);
 const settings: Ref<GameSettingsSpec | null> = ref(null);
 
@@ -2614,8 +2717,31 @@ const loadSettingsFromTemplate = async (templateName: string) => {
 
   const copy = JSON.parse(JSON.stringify(template)); // deep copy
   delete copy.default; // remove default property added by ES module
-  settings.value = copy;
+  settings.value = withAiDefaults(copy);
 };
+
+// Templates and older defaults don't have the AI settings.
+const withAiDefaults = (s: GameSettingsSpec) => {
+  s.general.aiOpponents ??= 0;
+  s.general.aiDifficulty ??= "normal";
+  s.general.aiOnlineHours ??= "enabled";
+  s.general.aiOpponentChoices ??= [];
+  return s;
+};
+
+const suggestedDifficulty = ref<string | null>(null);
+
+// AI opponents with personas: every other slot in single player.
+const botCount = computed(() =>
+  isSinglePlayer.value
+    ? Math.max(0, (settings.value?.general.playerLimit ?? 1) - 1)
+    : (settings.value?.general.aiOpponents ?? 0),
+);
+
+const aiOpponentOptions = computed(() => {
+  const max = Math.max(0, (settings.value?.general.playerLimit ?? 2) - 2);
+  return Array.from({ length: max + 1 }, (_, i) => i);
+});
 
 const validateTeamSettings = () => {
   if (settings.value!.general.mode !== "teamConquest") {
@@ -2678,13 +2804,26 @@ const handleSubmit = async (e: Event) => {
 
   isCreatingGame.value = true;
 
+  settings.value!.general.type = isSinglePlayer.value
+    ? "single_player"
+    : "custom";
+
+  if (isSinglePlayer.value) {
+    settings.value!.general.password = null;
+    settings.value!.general.aiOpponents = 0;
+  } else if (settings.value!.gameTime.maxTurnWait === 0) {
+    // Only single player games can wait forever for a turn.
+    settings.value!.gameTime.maxTurnWait = 1440;
+  }
+
   const response = await createGame(httpClient)(settings.value!);
 
   if (isOk(response)) {
     toast.success(`The game ${settings.value!.general.name} has been created.`);
 
+    // Single player games start straight away so go directly into the game.
     router.push({
-      name: "game-detail",
+      name: isSinglePlayer.value ? "game" : "game-detail",
       query: { id: response.data.gameId },
     });
   } else {
@@ -2736,6 +2875,11 @@ const onPlayerLimitChanged = () => {
     settings.value!.diplomacy.lockedAlliances = "disabled";
   }
 
+  settings.value!.general.aiOpponents = Math.min(
+    settings.value!.general.aiOpponents ?? 0,
+    Math.max(0, settings.value!.general.playerLimit - 2),
+  );
+
   onMaxAllianceTriggerChanged();
 };
 
@@ -2747,9 +2891,19 @@ onMounted(async () => {
   const response = await getDefaultSettings(httpClient)();
 
   if (isOk(response)) {
-    settings.value = response.data;
+    settings.value = withAiDefaults(response.data);
   } else {
     console.error(formatError(response));
+  }
+
+  // Start single player games at the difficulty your record against the bots suggests.
+  if (isSinglePlayer.value && settings.value) {
+    const record = await getSinglePlayerRecord(httpClient)();
+
+    if (isOk(record) && record.data.suggestedDifficulty) {
+      settings.value.general.aiDifficulty = record.data.suggestedDifficulty;
+      suggestedDifficulty.value = record.data.suggestedDifficulty;
+    }
   }
 });
 </script>

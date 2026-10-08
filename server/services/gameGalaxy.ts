@@ -1,3 +1,4 @@
+import { getPresence, lastSeen } from "./botPresence";
 import { CarrierWaypointBase, ValidationError } from "@solaris/common";
 import AvatarService from "./avatar";
 import BattleRoyaleService from "./battleRoyale";
@@ -836,6 +837,15 @@ export default class GameGalaxyService {
             if (!displayOnlineStatus) {
                 p.lastSeen = null;
                 p.isOnline = null;
+            } else if (!p.userId && p.aiPersona) {
+                // AI opponents keep human hours, or are always online.
+                const now = new Date();
+                const schedule =
+                    doc.settings.general.aiOnlineHours === "enabled"
+                        ? p.aiPersona.schedule
+                        : null;
+                p.isOnline = getPresence(schedule, now) === "online";
+                p.lastSeen = lastSeen(schedule, now);
             } else {
                 // Work out whether the player is online.
                 p.isOnline =

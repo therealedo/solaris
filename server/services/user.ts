@@ -1,5 +1,10 @@
 import EventEmitter from "events";
-import { UserGameSettings, ValidationError } from "@solaris/common";
+import {
+    AiDifficulty,
+    SinglePlayerRecordResponse,
+    UserGameSettings,
+    ValidationError,
+} from "@solaris/common";
 import PasswordService from "./password";
 import Repository from "./repository";
 import SessionService from "./session";
@@ -10,6 +15,11 @@ import { DateTime, Duration } from "luxon";
 import { ActiveModel } from "./types/ActiveModel";
 import { EmailService } from "./email";
 import { randomUUID } from "crypto";
+import {
+    addSinglePlayerResult,
+    normaliseSinglePlayerRecord,
+    suggestDifficulty,
+} from "./singlePlayerRecord";
 
 export const UserServiceEvents = {
     onUserCreated: "onUserCreated",
@@ -21,6 +31,7 @@ export default class UserService extends EventEmitter {
         public userRepo: Repository<User>,
         private passwordService: PasswordService,
         private sessionService: SessionService,
+        private everyoneEstablished: boolean = false,
     ) {
         super();
     }
@@ -105,6 +116,7 @@ export default class UserService extends EventEmitter {
             lastSeenIP: 0,
             oauth: 0,
             tutorialsCompleted: 0,
+            singlePlayerRecord: 0,
             isAnonymous: 0,
         });
     }
@@ -125,6 +137,7 @@ export default class UserService extends EventEmitter {
             lastSeenIP: 0,
             oauth: 0,
             tutorialsCompleted: 0,
+            singlePlayerRecord: 0,
             isAnonymous: 0,
         };
 
@@ -728,6 +741,10 @@ export default class UserService extends EventEmitter {
     }
 
     async isEstablishedPlayer(userId: DBObjectId) {
+        if (this.everyoneEstablished) {
+            return true;
+        }
+
         let user = await this.userRepo.findById(userId, {
             isEstablishedPlayer: 1,
         });
@@ -782,6 +799,67 @@ export default class UserService extends EventEmitter {
         );
 
         return user?.tutorialsCompleted || [];
+    }
+
+    async getSinglePlayerRecord(
+        userId: DBObjectId,
+    ): Promise<SinglePlayerRecordResponse> {
+        const user = await this.userRepo.findById(userId, {
+            singlePlayerRecord: 1,
+        });
+
+        if (!user) {
+            throw new ValidationError("User not found.", 404);
+        }
+
+        return {
+            record: normaliseSinglePlayerRecord(user.singlePlayerRecord),
+            suggestedDifficulty: suggestDifficulty(user.singlePlayerRecord),
+        };
+    }
+
+    // Adds a single player game result to a user loaded as a model, saved by the caller.
+    applySinglePlayerResult(
+        user: User,
+        difficulty: AiDifficulty | null | undefined,
+        won: boolean,
+    ) {
+        user.singlePlayerRecord = addSinglePlayerResult(
+            user.singlePlayerRecord,
+            difficulty,
+            won,
+            DateTime.utc().toJSDate(),
+        );
+    }
+
+    async recordSinglePlayerResult(
+        userId: DBObjectId,
+        difficulty: AiDifficulty | null | undefined,
+        won: boolean,
+    ) {
+        const user = await this.userRepo.findById(userId, {
+            singlePlayerRecord: 1,
+        });
+
+        if (!user) {
+            return;
+        }
+
+        await this.userRepo.updateOne(
+            {
+                _id: userId,
+            },
+            {
+                $set: {
+                    singlePlayerRecord: addSinglePlayerResult(
+                        user.singlePlayerRecord,
+                        difficulty,
+                        won,
+                        DateTime.utc().toJSDate(),
+                    ),
+                },
+            },
+        );
     }
 
     async updateLastReadAnnouncement(

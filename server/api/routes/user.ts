@@ -42,6 +42,12 @@ export default (
 
     answer(routes.getCredits, mw.auth.authenticate(), controller.getCredits);
 
+    answer(
+        routes.getSinglePlayerRecord,
+        mw.auth.authenticate(),
+        controller.getSinglePlayerRecord,
+    );
+
     answer(routes.detailMe, mw.auth.authenticate(), controller.detailMe);
 
     answer(

@@ -34,6 +34,7 @@ const schema = new Schema({
                 required: true,
                 enum: [
                     "tutorial",
+                    "single_player",
                     "custom",
                     "standard_rt",
                     "standard_tb",
@@ -139,6 +140,24 @@ const schema = new Schema({
                 default: "disabled",
             },
             spectators: {
+                type: Types.String,
+                required: false,
+                enum: ["disabled", "enabled"],
+                default: "disabled",
+            },
+            aiOpponents: {
+                type: Types.Number,
+                required: false,
+                min: 0,
+                default: 0,
+            },
+            aiDifficulty: {
+                type: Types.String,
+                required: false,
+                enum: ["classic", "easy", "normal", "hard", "brutal"],
+                default: "classic",
+            },
+            aiOnlineHours: {
                 type: Types.String,
                 required: false,
                 enum: ["disabled", "enabled"],
@@ -968,8 +987,8 @@ const schema = new Schema({
                 type: Types.Number,
                 required: true,
                 enum: [
-                    1, 5, 10, 30, 60, 120, 240, 360, 480, 600, 720, 1080, 1440,
-                    2880,
+                    0, 1, 5, 10, 30, 60, 120, 240, 360, 480, 600, 720, 1080,
+                    1440, 2880,
                 ],
                 default: 1440,
             }, // Time in minutes

@@ -57,6 +57,7 @@ export default class SpecialistHireService {
         carrierId: DBObjectId,
         specialistId: number,
         statisticsService: IStatisticsService,
+        writeToDB: boolean = true,
     ) {
         if (game.settings.specialGalaxy.specialistCost === "none") {
             throw new ValidationError(
@@ -151,28 +152,33 @@ export default class SpecialistHireService {
             ? game.state.tick + specialist.expireTicks
             : null;
 
-        // Update the DB.
-        await this.gameRepo.bulkWrite([
-            await this._deductSpecialistCost(game, player, specialist),
-            {
-                updateOne: {
-                    filter: {
-                        _id: game._id,
-                        "galaxy.carriers._id": carrier._id,
-                    },
-                    update: {
-                        "galaxy.carriers.$.specialistId": carrier.specialistId,
-                        "galaxy.carriers.$.specialistExpireTick":
-                            carrier.specialistExpireTick,
+        // Update the DB, unless the caller saves the game itself (e.g. the AI during a tick).
+        if (writeToDB) {
+            await this.gameRepo.bulkWrite([
+                await this._deductSpecialistCost(game, player, specialist),
+                {
+                    updateOne: {
+                        filter: {
+                            _id: game._id,
+                            "galaxy.carriers._id": carrier._id,
+                        },
+                        update: {
+                            "galaxy.carriers.$.specialistId":
+                                carrier.specialistId,
+                            "galaxy.carriers.$.specialistExpireTick":
+                                carrier.specialistExpireTick,
+                        },
                     },
                 },
-            },
-        ]);
+            ]);
+        } else {
+            this._deductSpecialistCostInMemory(game, player, specialist);
+        }
 
         if (
             player.userId &&
             !player.defeated &&
-            !this.gameTypeService.isTutorialGame(game)
+            !this.gameTypeService.isSoloGame(game)
         ) {
             await statisticsService.modifyStats(
                 game._id,
@@ -192,11 +198,15 @@ export default class SpecialistHireService {
                 true,
             );
 
-        let waypoints =
-            await this.cullWaypointsService.cullWaypointsByHyperspaceRangeDB(
-                game,
-                carrier,
-            );
+        let waypoints = writeToDB
+            ? await this.cullWaypointsService.cullWaypointsByHyperspaceRangeDB(
+                  game,
+                  carrier,
+              )
+            : this.cullWaypointsService.cullWaypointsByHyperspaceRange(
+                  game,
+                  carrier,
+              );
 
         let result = {
             game,
@@ -215,6 +225,7 @@ export default class SpecialistHireService {
         starId: DBObjectId,
         specialistId: number,
         statisticsService: IStatisticsService,
+        writeToDB: boolean = true,
     ) {
         if (game.settings.specialGalaxy.specialistCost === "none") {
             throw new ValidationError(
@@ -310,28 +321,32 @@ export default class SpecialistHireService {
             ? game.state.tick + specialist.expireTicks
             : null;
 
-        // Update the DB.
-        await this.gameRepo.bulkWrite([
-            await this._deductSpecialistCost(game, player, specialist),
-            {
-                updateOne: {
-                    filter: {
-                        _id: game._id,
-                        "galaxy.stars._id": star._id,
-                    },
-                    update: {
-                        "galaxy.stars.$.specialistId": star.specialistId,
-                        "galaxy.stars.$.specialistExpireTick":
-                            star.specialistExpireTick,
+        // Update the DB, unless the caller saves the game itself (e.g. the AI during a tick).
+        if (writeToDB) {
+            await this.gameRepo.bulkWrite([
+                await this._deductSpecialistCost(game, player, specialist),
+                {
+                    updateOne: {
+                        filter: {
+                            _id: game._id,
+                            "galaxy.stars._id": star._id,
+                        },
+                        update: {
+                            "galaxy.stars.$.specialistId": star.specialistId,
+                            "galaxy.stars.$.specialistExpireTick":
+                                star.specialistExpireTick,
+                        },
                     },
                 },
-            },
-        ]);
+            ]);
+        } else {
+            this._deductSpecialistCostInMemory(game, player, specialist);
+        }
 
         if (
             player.userId &&
             !player.defeated &&
-            !this.gameTypeService.isTutorialGame(game)
+            !this.gameTypeService.isSoloGame(game)
         ) {
             await statisticsService.modifyStats(
                 game._id,
@@ -371,6 +386,30 @@ export default class SpecialistHireService {
                 return player.credits >= cost.credits;
             case "creditsSpecialists":
                 return player.creditsSpecialists >= cost.creditsSpecialists;
+            default:
+                throw new Error(
+                    `Unsupported specialist currency type: ${game.settings.specialGalaxy.specialistsCurrency}`,
+                );
+        }
+    }
+
+    _deductSpecialistCostInMemory(
+        game: Game,
+        player: Player,
+        specialist: Specialist,
+    ) {
+        let cost = this.specialistService.getSpecialistActualCost(
+            game,
+            specialist,
+        );
+
+        switch (game.settings.specialGalaxy.specialistsCurrency) {
+            case "credits":
+                player.credits -= cost.credits;
+                break;
+            case "creditsSpecialists":
+                player.creditsSpecialists -= cost.creditsSpecialists;
+                break;
             default:
                 throw new Error(
                     `Unsupported specialist currency type: ${game.settings.specialGalaxy.specialistsCurrency}`,

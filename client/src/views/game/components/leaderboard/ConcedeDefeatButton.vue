@@ -6,7 +6,13 @@
       title="Concede Defeat"
     >
       <i class="fas fa-skull-crossbones"></i>
-      {{ isTutorialGame ? "Quit Tutorial" : "Concede Defeat" }}
+      {{
+        isTutorialGame
+          ? "Quit Tutorial"
+          : isSinglePlayerGame
+            ? "Quit Game"
+            : "Concede Defeat"
+      }}
     </button>
     <button
       type="button"
@@ -14,11 +20,11 @@
       data-bs-toggle="dropdown"
       aria-haspopup="true"
       aria-expanded="false"
-      v-if="!isTutorialGame"
+      v-if="!isSoloGame"
     >
       <span class="sr-only">Toggle Dropdown</span>
     </button>
-    <div class="dropdown-menu" v-if="!isTutorialGame">
+    <div class="dropdown-menu" v-if="!isSoloGame">
       <a
         class="dropdown-item"
         href="javascript:;"
@@ -58,6 +64,10 @@ const isConcedingDefeat = ref(false);
 
 const userPlayer = computed(() => GameHelper.getUserPlayer(store.game!)!);
 const isTutorialGame = computed(() => GameHelper.isTutorialGame(store.game!));
+const isSinglePlayerGame = computed(() =>
+  GameHelper.isSinglePlayerGame(store.game!),
+);
+const isSoloGame = computed(() => GameHelper.isSoloGame(store.game!));
 const isGameInProgress = computed(
   () =>
     GameHelper.isGameStarted(store.game!) &&
@@ -70,6 +80,9 @@ const doConcedeDefeat = async (openSlot: boolean) => {
   if (isTutorialGame.value) {
     message =
       "Are you sure you want to exit the tutorial? All progress will be lost.";
+  } else if (isSinglePlayerGame.value) {
+    message =
+      "Are you sure you want to quit this single player game? The game will be deleted.";
   }
 
   if (openSlot) {
@@ -88,7 +101,7 @@ const doConcedeDefeat = async (openSlot: boolean) => {
     if (isOk(response)) {
       AudioService.quit();
 
-      if (!isTutorialGame.value) {
+      if (!isSoloGame.value) {
         toast.error(`You have conceded defeat, better luck next time.`);
       }
 

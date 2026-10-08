@@ -622,6 +622,14 @@ class GameHelper {
     return game.settings.general.type === "tutorial";
   }
 
+  isSinglePlayerGame(game) {
+    return game.settings.general.type === "single_player";
+  }
+
+  isSoloGame(game) {
+    return this.isTutorialGame(game) || this.isSinglePlayerGame(game);
+  }
+
   isSpectatingEnabled(game) {
     return game.settings.general.spectators === "enabled";
   }
@@ -898,7 +906,7 @@ class GameHelper {
   listAllUndefeatedPlayers(game) {
     let undefeatedPlayers;
 
-    if (this.isTutorialGame(game)) {
+    if (this.isSoloGame(game)) {
       undefeatedPlayers = game.galaxy.players.filter((p) => p.userId);
     } else {
       undefeatedPlayers = game.galaxy.players.filter((p) => !p.defeated);
@@ -955,6 +963,11 @@ class GameHelper {
 
       if (isAllPlayersReady) {
         return true;
+      }
+
+      // No limit: the turn waits for everyone to be ready.
+      if (game.settings.gameTime.maxTurnWait === 0) {
+        return false;
       }
 
       nextTick = DateTime.fromJSDate(lastTick!)

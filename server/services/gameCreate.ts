@@ -1,7 +1,13 @@
 import { MathRandomGen, SeededRandomGen } from "../utils/randomGen";
 
-import { ValidationError } from "@solaris/common";
+import {
+    AiOpponentChoice,
+    UNICODE_PRINTABLE_CHARACTERS_WITH_WHITESPACE,
+    ValidationError,
+} from "@solaris/common";
+import { createPersonaStates } from "./botPersonas";
 import { Game } from "./types/Game";
+import { Player } from "./types/Player";
 import UserAchievementService from "./userAchievement";
 import ConversationService from "./conversation";
 import GameFluxService from "./gameFlux";
@@ -37,6 +43,10 @@ import { IEventService } from "./types/IEventService";
 const GAME_MASTER_LIMIT = 5;
 
 const ESTABLISHED_PLAYER_LIMIT = 2;
+
+// Every single player game's AI personas share the server's free LLM quota, so one
+// account can't have too many running at once.
+const SINGLE_PLAYER_GAME_LIMIT = 3;
 
 const RANDOM_NAME_STRING = "[[[RANDOM]]]";
 
@@ -130,6 +140,7 @@ export default class GameCreateService {
         userId: DBObjectId | null,
     ) {
         const isTutorial = settingsReq.general.type === "tutorial";
+        const isSinglePlayer = settingsReq.general.type === "single_player";
         const isCustomGalaxy = settingsReq.galaxy.galaxyType === "custom";
         const isAdvancedCustomGalaxy =
             isCustomGalaxy &&
@@ -263,7 +274,17 @@ export default class GameCreateService {
 
         if (isTutorial) {
             this._setupTutorialPlayers(game);
+        } else if (isSinglePlayer) {
+            await this._setupSinglePlayerPlayers(
+                game,
+                settings.general.aiOpponentChoices,
+            );
+            this.conversationService.createConversationAllPlayers(game);
         } else {
+            this._setupAiOpponentSlots(
+                game,
+                settings.general.aiOpponentChoices,
+            );
             this.conversationService.createConversationAllPlayers(game);
         }
 
@@ -300,6 +321,7 @@ export default class GameCreateService {
         desiredStarCount: number;
     }> {
         const isTutorial = settings.general.type === "tutorial";
+        const isSinglePlayer = settings.general.type === "single_player";
         const isOfficialGame = !userId;
         const isCustomGalaxy = settings.galaxy.galaxyType === "custom";
         const isAdvancedCustomGalaxy =
@@ -318,10 +340,54 @@ export default class GameCreateService {
         if (!isOfficialGame) {
             if (isTutorial) {
                 settings.general.type = "tutorial";
+            } else if (isSinglePlayer) {
+                // Single player games start immediately against AI, so there are no
+                // open game limits to enforce and nobody else can join.
+                await this._validateUserCanCreateSinglePlayerGame(userId!);
+                settings.general.type = "single_player";
+                settings.general.password = null;
+                settings.general.afkSlotsOpen = "disabled";
+                settings.general.advancedAI = "enabled";
             } else {
                 await this._validateUserCanCreateGame(userId!, settings);
                 settings.general.type = "custom";
             }
+        }
+
+        const isCustomGame = settings.general.type === "custom";
+        const aiOpponents = isCustomGame
+            ? (settings.general.aiOpponents ?? 0)
+            : 0;
+
+        if (aiOpponents > settings.general.playerLimit - 2) {
+            throw new ValidationError(
+                "Leave at least 2 slots for human players, or create a single player game instead.",
+            );
+        }
+
+        settings.general.aiOpponents = aiOpponents;
+
+        if (!isSinglePlayer && !aiOpponents) {
+            // Only AI opponents with personas use the difficulty setting.
+            settings.general.aiDifficulty = "classic";
+            settings.general.aiOnlineHours = "disabled";
+            settings.general.aiOpponentChoices = undefined;
+        }
+
+        settings.general.aiOpponentChoices = this._validateAiOpponentChoices(
+            settings.general.aiOpponentChoices,
+        );
+
+        if (settings.gameTime.maxTurnWait === 0 && !isSinglePlayer) {
+            throw new ValidationError(
+                "Only single player games can have an unlimited turn wait.",
+            );
+        }
+
+        if (isOfficialGame && isSinglePlayer) {
+            throw new ValidationError(
+                "Single player games must be created by a user.",
+            );
         }
 
         if (settings.general.playerLimit < 2) {
@@ -564,6 +630,19 @@ export default class GameCreateService {
         }
     }
 
+    async _validateUserCanCreateSinglePlayerGame(userId: DBObjectId) {
+        const inProgress =
+            await this.gameListService.countInProgressSinglePlayerGamesCreatedByUser(
+                userId,
+            );
+
+        if (inProgress >= SINGLE_PLAYER_GAME_LIMIT) {
+            throw new ValidationError(
+                `You can have at most ${SINGLE_PLAYER_GAME_LIMIT} single player games in progress. Finish or quit one before starting another.`,
+            );
+        }
+    }
+
     async _validateUserCanCreateGame(
         userId: DBObjectId,
         settings: GameSettingsReq,
@@ -673,5 +752,136 @@ export default class GameCreateService {
             0,
         );
         this.gameJoinService.assignNonUserPlayersToAI(game);
+    }
+
+    async _setupSinglePlayerPlayers(
+        game: Game,
+        choices: AiOpponentChoice[] = [],
+    ) {
+        // Put the creator into the first slot and hand every other slot to the AI.
+        // Assigning the only human player starts the game straight away.
+        const userId = game.settings.general.createdByUserId!;
+        const user = await this.userService.getById(userId, { username: 1 });
+
+        this.gameJoinService.assignPlayerToUser(
+            game,
+            game.galaxy.players[0],
+            userId,
+            user?.username || "Player",
+            0,
+        );
+        this.gameJoinService.assignNonUserPlayersToAI(game);
+
+        // Give every AI opponent a personality for diplomacy and chat.
+        this._giveBotsPersonas(
+            game,
+            game.galaxy.players.filter((p) => !p.userId),
+            choices,
+        );
+    }
+
+    // In a game with several humans, hands random slots to AI opponents with personas
+    // before anyone joins. Those slots stay closed and the game starts once the humans
+    // fill the rest.
+    _setupAiOpponentSlots(
+        game: Game,
+        // Kept out of the saved settings, so passed in separately.
+        choices: AiOpponentChoice[] = game.settings.general.aiOpponentChoices ??
+            [],
+    ) {
+        const count = game.settings.general.aiOpponents ?? 0;
+
+        if (count <= 0) {
+            return;
+        }
+
+        const slots = [...game.galaxy.players];
+
+        for (let i = slots.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [slots[i], slots[j]] = [slots[j], slots[i]];
+        }
+
+        const bots = slots.slice(0, count);
+
+        this.gameJoinService.assignNonUserPlayersToAI(game, false, bots);
+        this._giveBotsPersonas(game, bots, choices);
+
+        bots.forEach((bot) => {
+            bot.ready = true;
+        });
+    }
+
+    // Personas for the bots, with any persona, name and avatar the creator picked.
+    // The picks aren't kept in the settings, where other players could read them.
+    _giveBotsPersonas(game: Game, bots: Player[], choices: AiOpponentChoice[]) {
+        const personas = createPersonaStates(
+            bots.length,
+            Math.random,
+            choices.map((c) => c.persona),
+        );
+        const avatars = new Set(
+            this.gameJoinService.avatarService
+                .listAllSolarisAvatars()
+                .map((a) => a.id.toString()),
+        );
+
+        bots.forEach((bot, i) => {
+            const choice = choices[i];
+
+            bot.aiPersona = personas[i];
+
+            if (choice?.avatar != null && avatars.has(String(choice.avatar))) {
+                bot.avatar = String(choice.avatar);
+            }
+
+            if (choice?.alias) {
+                const taken = game.galaxy.players.some(
+                    (p) =>
+                        p !== bot &&
+                        (p.alias || "").toLowerCase() ===
+                            choice.alias!.toLowerCase(),
+                );
+
+                if (!taken) {
+                    bot.alias = choice.alias;
+                }
+            }
+        });
+
+        game.settings.general.aiOpponentChoices = undefined;
+    }
+
+    _validateAiOpponentChoices(
+        choices: AiOpponentChoice[] | undefined,
+    ): AiOpponentChoice[] | undefined {
+        if (!choices?.length) {
+            return undefined;
+        }
+
+        return choices.slice(0, 64).map((c) => {
+            const alias = (c.alias ?? "").replace(/\s+/g, " ").trim();
+
+            if (alias && (alias.length < 3 || alias.length > 24)) {
+                throw new ValidationError(
+                    "AI opponent names must be between 3 and 24 characters long.",
+                );
+            }
+
+            if (
+                alias &&
+                !UNICODE_PRINTABLE_CHARACTERS_WITH_WHITESPACE.test(alias)
+            ) {
+                throw new ValidationError(
+                    "AI opponent names can only contain printable characters.",
+                );
+            }
+
+            return {
+                persona: c.persona || null,
+                alias: alias || null,
+                avatar: c.avatar ?? null,
+            };
+        });
     }
 }

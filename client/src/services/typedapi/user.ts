@@ -6,6 +6,7 @@ import {
   type UserPrivate,
   type UserAvatar,
   type AchievementsUser,
+  type SinglePlayerRecordResponse,
 } from "@solaris/common";
 import {
   doGet,
@@ -84,6 +85,17 @@ export const saveSubscriptions =
 export const getCredits =
   (axios: Axios) => async (): Promise<ResponseResult<{ credits: number }>> => {
     return doGet(axios)(routes.getCredits, {}, {}, { withCredentials: true });
+  };
+
+export const getSinglePlayerRecord =
+  (axios: Axios) =>
+  async (): Promise<ResponseResult<SinglePlayerRecordResponse>> => {
+    return doGet(axios)(
+      routes.getSinglePlayerRecord,
+      {},
+      {},
+      { withCredentials: true },
+    );
   };
 
 export const detailMe =

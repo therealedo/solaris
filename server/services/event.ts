@@ -224,6 +224,37 @@ export class EventService implements IEventService {
         };
     }
 
+    // Every event that can be a turning point in the story of a finished game,
+    // oldest first.
+    async listGameStoryEvents(
+        gameId: DBObjectId,
+    ): Promise<BaseGameEvent<DBObjectId>[]> {
+        return await this.eventRepo.find(
+            {
+                gameId,
+                type: {
+                    $in: [
+                        EVENT_TYPES.GAME_STARTED,
+                        EVENT_TYPES.GAME_PLAYER_DEFEATED,
+                        EVENT_TYPES.GAME_PLAYER_AFK,
+                        EVENT_TYPES.PLAYER_DIPLOMACY_STATUS_CHANGED,
+                        EVENT_TYPES.PLAYER_COMBAT_STAR,
+                        EVENT_TYPES.PLAYER_COMBAT_CARRIER,
+                    ],
+                },
+            },
+            {
+                tick: 1,
+                type: 1,
+                data: 1,
+            },
+            {
+                tick: 1,
+                _id: 1,
+            },
+        );
+    }
+
     async markAllEventsAsRead(game: Game, playerId: DBObjectId) {
         await this.eventRepo.updateMany(
             {

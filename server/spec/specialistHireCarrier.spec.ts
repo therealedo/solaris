@@ -37,7 +37,7 @@ describe("specialistHire - Carrier", () => {
                 },
             },
             gameTypeService: {
-                isTutorialGame: () => {
+                isSoloGame: () => {
                     return false;
                 },
             },

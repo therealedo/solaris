@@ -58,6 +58,7 @@ import { EventService } from "./event";
 import StatisticsService from "./statistics";
 import { NotificationService } from "./notification";
 import { EmailService } from "./email";
+import BotDiplomacyService from "./botDiplomacy";
 
 const log = logger("Game Tick Service");
 
@@ -100,6 +101,7 @@ export default class GameTickService extends EventEmitter {
     carrierTravelService: CarrierTravelService<DBObjectId>;
     carrierCombatService: CarrierCombatService;
     combatProcessingService: CombatProcessingService;
+    botDiplomacyService: BotDiplomacyService;
 
     constructor(
         distanceService: DistanceService,
@@ -136,6 +138,7 @@ export default class GameTickService extends EventEmitter {
         carrierTravelService: CarrierTravelService<DBObjectId>,
         carrierCombatService: CarrierCombatService,
         combatProcessingService: CombatProcessingService,
+        botDiplomacyService: BotDiplomacyService,
     ) {
         super();
 
@@ -173,6 +176,7 @@ export default class GameTickService extends EventEmitter {
         this.carrierTravelService = carrierTravelService;
         this.carrierCombatService = carrierCombatService;
         this.combatProcessingService = combatProcessingService;
+        this.botDiplomacyService = botDiplomacyService;
     }
 
     async tick(
@@ -396,6 +400,13 @@ export default class GameTickService extends EventEmitter {
             iterations--;
         }
 
+        await this.botDiplomacyService.play(
+            game,
+            context.getEventService(),
+            context.getNotificationService(),
+        );
+        logTime("AI diplomacy and chat");
+
         this._sanitiseDarkModeCarrierWaypoints(game);
         logTime("Sanitise dark mode carrier waypoints");
 
@@ -465,6 +476,11 @@ export default class GameTickService extends EventEmitter {
 
             if (isAllPlayersReady) {
                 return true;
+            }
+
+            // No limit: the turn waits for everyone to be ready.
+            if (game.settings.gameTime.maxTurnWait === 0) {
+                return false;
             }
 
             nextTick = lastTick.plus({
@@ -721,6 +737,9 @@ export default class GameTickService extends EventEmitter {
         if (hasProductionTicked) {
             game.state.productionTick++;
 
+            // Income per player this cycle, for the AI difficulty adjustment.
+            const incomes = new Map<string, number>();
+
             // For each player, perform the end of cycle actions.
             // Give each player money.
             // Conduct experiments.
@@ -732,6 +751,8 @@ export default class GameTickService extends EventEmitter {
                         game,
                         player,
                     );
+                incomes.set(player._id.toString(), creditsResult.creditsTotal);
+
                 let experimentResult = this.researchService.conductExperiments(
                     game,
                     player,
@@ -785,6 +806,8 @@ export default class GameTickService extends EventEmitter {
                 }
             }
 
+            this.botDiplomacyService.applyDifficulty(game, incomes);
+
             // Destroy stars for battle royale mode.
             if (game.settings.general.mode === "battleRoyale") {
                 this.battleRoyaleService.performBattleRoyaleTick(game);
@@ -810,7 +833,7 @@ export default class GameTickService extends EventEmitter {
     ) {
         // Check to see if anyone has been defeated.
         // A player is defeated if they have no stars and no carriers remaining.
-        const isTutorialGame = this.gameTypeService.isTutorialGame(game);
+        const isSoloGame = this.gameTypeService.isSoloGame(game);
         const undefeatedPlayers = game.galaxy.players.filter(
             (p) => !p.defeated,
         );
@@ -851,7 +874,7 @@ export default class GameTickService extends EventEmitter {
                         game.afkers.push(player.userId);
                     }
 
-                    if (user && !isTutorialGame) {
+                    if (user && !isSoloGame) {
                         this.playerAfkService.incrementAfkCount(user);
                     }
 
@@ -864,7 +887,7 @@ export default class GameTickService extends EventEmitter {
 
                     await eventService.createPlayerAfkEvent(e);
                 } else {
-                    if (user && !isTutorialGame) {
+                    if (user && !isSoloGame) {
                         user.achievements.defeated++;
 
                         if (this.gameTypeService.is1v1Game(game)) {
@@ -896,7 +919,7 @@ export default class GameTickService extends EventEmitter {
         notificationService: INotificationService,
         emailService: IEmailService,
     ) {
-        const isTutorialGame = this.gameTypeService.isTutorialGame(game);
+        const isSoloGame = this.gameTypeService.isSoloGame(game);
 
         // Update the leaderboard state here so we can keep track of positions
         // without having to actually calculate it.
@@ -949,7 +972,7 @@ export default class GameTickService extends EventEmitter {
                 }
             }
 
-            if (!isTutorialGame) {
+            if (!isSoloGame) {
                 let rankingResult: GameRankingResult<DBObjectId> | null = null;
 
                 if (this.gameTypeService.isRankedGame(game)) {
@@ -980,7 +1003,11 @@ export default class GameTickService extends EventEmitter {
                 await eventService.createGameEndedEvent(e);
                 await notificationService.onGameEnded(e);
                 await emailService.sendGameFinishedEmail(e.gameId);
-            } else if (winner.kind === "player") {
+            } else if (this.gameTypeService.isSinglePlayerGame(game)) {
+                this._recordSinglePlayerResults(game, gameUsers, winner);
+            }
+
+            if (isSoloGame && winner.kind === "player") {
                 // game is tutorial
                 const userId = winner.player.userId;
                 const user = gameUsers.find(
@@ -1002,6 +1029,40 @@ export default class GameTickService extends EventEmitter {
         }
 
         return false;
+    }
+
+    // Single player games don't count towards rank, but each human's result goes
+    // into their separate single player record.
+    _recordSinglePlayerResults(
+        game: Game,
+        gameUsers: User[],
+        winner: GameWinner,
+    ) {
+        for (const player of game.galaxy.players) {
+            const user = gameUsers.find(
+                (u) =>
+                    player.userId &&
+                    u._id.toString() === player.userId.toString(),
+            );
+
+            if (!user) {
+                continue;
+            }
+
+            const playerId = player._id.toString();
+            const won =
+                winner.kind === "player"
+                    ? winner.player._id.toString() === playerId
+                    : winner.team.players.some(
+                          (id) => id.toString() === playerId,
+                      );
+
+            this.userService.applySinglePlayerResult(
+                user,
+                game.settings.general.aiDifficulty,
+                won,
+            );
+        }
     }
 
     _awardEndGameRank(game: Game, gameUsers: User[], awardCredits: boolean) {

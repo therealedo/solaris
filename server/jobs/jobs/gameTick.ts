@@ -59,6 +59,16 @@ const tryTickGame = async (
             } finally {
                 await container.gameLockService.lock(gameId, false);
             }
+
+            // AI personas plan their diplomacy in the background after the tick. It
+            // waits for this job's mutex, so it can't overlap the next tick.
+            if (container.botBrainService.isEnabled(game)) {
+                container.botBrainService.onGameTicked(
+                    gameId,
+                    container.eventService,
+                    container.notificationService,
+                );
+            }
         }
     } catch (e) {
         log.error(e);

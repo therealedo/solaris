@@ -68,6 +68,54 @@ export const GAME_CREATION_OPTIONS = {
                 text: "Disabled",
             },
         ],
+        // Must match the persona keys in server/services/botPersonas.ts.
+        aiPersona: [
+            { value: "any", text: "Any persona (each bot a different one)" },
+            { value: "random", text: "Completely random persona" },
+            { value: "honourable_admiral", text: "The Honourable Admiral" },
+            { value: "silver_tongue", text: "The Silver Tongue" },
+            { value: "warlord", text: "The Warlord" },
+            { value: "merchant_prince", text: "The Merchant Prince" },
+            {
+                value: "paranoid_isolationist",
+                text: "The Paranoid Isolationist",
+            },
+            { value: "zealot", text: "The Zealot" },
+            { value: "opportunist", text: "The Opportunist" },
+            { value: "diplomat", text: "The Diplomat" },
+        ],
+        aiOnlineHours: [
+            {
+                value: "enabled",
+                text: "Keep human hours (asleep at night, busy some of the day)",
+            },
+            {
+                value: "disabled",
+                text: "Always online",
+            },
+        ],
+        aiDifficulty: [
+            {
+                value: "easy",
+                text: "Easy (bots stay well behind you)",
+            },
+            {
+                value: "normal",
+                text: "Normal (bots keep pace with you)",
+            },
+            {
+                value: "hard",
+                text: "Hard (bots pull ahead of you)",
+            },
+            {
+                value: "brutal",
+                text: "Brutal (bots aim to crush you)",
+            },
+            {
+                value: "classic",
+                text: "Classic (original AI, no adjustment)",
+            },
+        ],
         advancedAI: [
             {
                 value: "enabled",
@@ -902,6 +950,10 @@ export const GAME_CREATION_OPTIONS = {
             },
         ],
         maxTurnWait: [
+            {
+                value: 0,
+                text: "Unlimited (single player only)",
+            },
             {
                 value: 1,
                 text: "1 Minute",

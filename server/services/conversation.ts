@@ -378,12 +378,6 @@ export default class ConversationService extends EventEmitter {
         message: string,
         notificationService: INotificationService,
     ): Promise<ConversationMessageSentResult<DBObjectId>> {
-        message = message.trim();
-
-        if (message === "") {
-            throw new ValidationError(`Message must not be empty.`);
-        }
-
         // Get the conversation that the player has requested in full.
         let convo = game.conversations.find(
             (c) => c._id.toString() === conversationId.toString(),
@@ -393,6 +387,30 @@ export default class ConversationService extends EventEmitter {
             throw new ValidationError(
                 `The conversation requested does not exist.`,
             );
+        }
+
+        return await this.sendToConversation(
+            game,
+            player,
+            convo,
+            message,
+            notificationService,
+        );
+    }
+
+    // Sends a message to a conversation object directly, for callers (such as AI players)
+    // that may hold a conversation which is not yet loaded into the game document.
+    async sendToConversation(
+        game: Game,
+        player: Player,
+        convo: Conversation<DBObjectId>,
+        message: string,
+        notificationService: INotificationService,
+    ): Promise<ConversationMessageSentResult<DBObjectId>> {
+        message = message.trim();
+
+        if (message === "") {
+            throw new ValidationError(`Message must not be empty.`);
         }
 
         if (

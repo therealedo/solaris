@@ -1,6 +1,10 @@
 import { DBObjectId } from "./DBObjectId";
 import { UserLevel } from "./UserLevel";
-import type { UserAchievements, UserGameSettings } from "@solaris/common";
+import type {
+    SinglePlayerRecord,
+    UserAchievements,
+    UserGameSettings,
+} from "@solaris/common";
 
 export interface UserRoles {
     administrator: boolean;
@@ -87,4 +91,5 @@ export interface User {
     oauth: UserOAuth;
     subscriptions: UserSubscriptions;
     tutorialsCompleted?: string[];
+    singlePlayerRecord?: SinglePlayerRecord;
 }

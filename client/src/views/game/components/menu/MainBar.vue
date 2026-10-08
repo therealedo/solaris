@@ -213,6 +213,11 @@
         v-if="menuState.state == 'statistics'"
         @onCloseRequested="onCloseRequested"
       />
+      <game-story
+        v-if="menuState.state == 'gameStory'"
+        @onCloseRequested="onCloseRequested"
+        @onOpenPlayerDetailRequested="onOpenPlayerDetailRequested"
+      />
       <select-star
         v-if="menuState.state === 'selectStar'"
         :callback="menuState.callback"
@@ -263,6 +268,7 @@ import ReportPlayer from "../report/ReportPlayer.vue";
 import Spectators from "../spectators/Spectators.vue";
 import type { CarrierWaypoint as CWTp } from "@solaris/common";
 import GameStatistics from "@/views/game/components/statistics/GameStatistics.vue";
+import GameStory from "@/views/game/components/story/GameStory.vue";
 import { useUserStore } from "@/stores/user";
 import { useGameStore } from "@/stores/game";
 import type { MenuState, ReportPlayerArgs } from "@/types/menu";

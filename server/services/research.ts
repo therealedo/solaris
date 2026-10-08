@@ -156,7 +156,7 @@ export default class ResearchService extends EventEmitter {
         if (
             user &&
             !player.defeated &&
-            !this.gameTypeService.isTutorialGame(game)
+            !this.gameTypeService.isSoloGame(game)
         ) {
             statisticsService.modifyStats(game._id, player._id, (stats) => {
                 stats.research[techKey] += progressIncrease;

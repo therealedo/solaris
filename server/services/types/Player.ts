@@ -5,7 +5,7 @@ import {
     ResearchTypeNotRandom,
 } from "@solaris/common";
 import { PlayerStatistics } from "./Leaderboard";
-import { AiState } from "./Ai";
+import { AiPersonaState, AiState } from "./Ai";
 import { InfrastructureType } from "./Star";
 
 export type PlayerShape = "circle" | "square" | "diamond" | "hexagon";
@@ -117,6 +117,7 @@ export interface Player {
     currentResearchTicksEta?: number | null;
     nextResearchTicksEta?: number | null;
     aiState?: AiState | null;
+    aiPersona?: AiPersonaState | null;
     hasPerspective?: boolean;
     colourMapping?: Map<String, PlayerColour>;
 }

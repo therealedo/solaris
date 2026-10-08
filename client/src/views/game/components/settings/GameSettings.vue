@@ -259,7 +259,9 @@
               title="Max Turn Wait"
               tooltip="The timeout period in which players have to take their turn, if the limit is reached then the turn will process regardless of whether players are ready or not"
               :valueText="
-                game.settings.gameTime.maxTurnWait >= 60
+                game.settings.gameTime.maxTurnWait === 0
+                  ? 'Unlimited'
+                  : game.settings.gameTime.maxTurnWait >= 60
                   ? game.settings.gameTime.maxTurnWait / 60 + ' hour(s)'
                   : game.settings.gameTime.maxTurnWait + ' minute(s)'
               "

@@ -170,8 +170,8 @@ export default class GameService extends EventEmitter {
             throw new ValidationError("Cannot quit a game that has finished.");
         }
 
-        // If its a tutorial game then straight up delete it.
-        if (this.gameTypeService.isTutorialGame(game)) {
+        // If its a solo game (tutorial or single player) then straight up delete it.
+        if (this.gameTypeService.isSoloGame(game)) {
             await this.delete(game, undefined, eventService);
 
             return null;
@@ -227,8 +227,20 @@ export default class GameService extends EventEmitter {
 
         const wasAI = this.playerAfkService.isAIControlled(game, player);
 
-        // If its a tutorial game then straight up delete it.
-        if (this.gameTypeService.isTutorialGame(game)) {
+        // If its a solo game (tutorial or single player) then straight up delete it.
+        if (this.gameTypeService.isSoloGame(game)) {
+            // Giving up on a single player game counts as a loss.
+            if (
+                player.userId &&
+                this.gameTypeService.isSinglePlayerGame(game)
+            ) {
+                await this.userService.recordSinglePlayerResult(
+                    player.userId,
+                    game.settings.general.aiDifficulty,
+                    false,
+                );
+            }
+
             return this.delete(game, undefined, eventService);
         }
 
@@ -250,7 +262,7 @@ export default class GameService extends EventEmitter {
             this.carrierService.clearPlayerCarrierWaypointsLooped(game, player);
         }
 
-        if (player.userId && !this.gameTypeService.isTutorialGame(game)) {
+        if (player.userId && !this.gameTypeService.isSoloGame(game)) {
             await this.achievementService.incrementDefeated(player.userId, 1);
         }
 
@@ -492,7 +504,7 @@ export default class GameService extends EventEmitter {
         // If the game hasn't started yet, re-adjust user achievements of players
         // who joined the game.
         if (
-            !this.gameTypeService.isTutorialGame(game) &&
+            !this.gameTypeService.isSoloGame(game) &&
             game.state.startDate == null
         ) {
             // Deduct "joined" count for all players who already joined the game.
@@ -589,7 +601,7 @@ export default class GameService extends EventEmitter {
     }
 
     listAllUndefeatedPlayers(game: Game) {
-        if (this.gameTypeService.isTutorialGame(game)) {
+        if (this.gameTypeService.isSoloGame(game)) {
             return game.galaxy.players.filter((p) => p.userId);
         }
 

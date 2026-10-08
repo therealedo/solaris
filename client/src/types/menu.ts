@@ -48,6 +48,7 @@ export type MenuState =
   | { state: "reportPlayer"; args: ReportPlayerArgs }
   | { state: "spectators" }
   | { state: "statistics" }
+  | { state: "gameStory" }
   | { state: "selectStar"; callback: (star: Star | undefined) => void }
   | {
       state: "selectCarrier";

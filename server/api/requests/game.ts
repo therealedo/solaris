@@ -22,6 +22,8 @@ import {
 } from "@solaris/common";
 import { keyHasBooleanValue, keyHasStringValue } from "./helpers";
 import {
+    AI_DIFFICULTIES,
+    AiDifficulty,
     GAME_ALLIANCE_UPKEEP_COST,
     GAME_AWARD_RANK_TO,
     GAME_BANKING_REWARDS,
@@ -170,6 +172,30 @@ const parseGameSettingsGeneral: Validator<GameSettingsGeneralBase> = object({
         ),
     ),
     joinRandomSlot: withDefault("disabled", enabledDisabled),
+    aiOpponents: withDefault(
+        0,
+        numberAdv({
+            integer: true,
+            range: {
+                from: 0,
+                to: 62,
+            },
+        }),
+    ),
+    aiDifficulty: withDefault(
+        "classic",
+        stringEnumeration<AiDifficulty, AiDifficulty[]>([...AI_DIFFICULTIES]),
+    ),
+    aiOnlineHours: withDefault("disabled", enabledDisabled),
+    aiOpponentChoices: maybeUndefined(
+        array(
+            object({
+                persona: maybeUndefined(maybeNull(string)),
+                alias: maybeUndefined(maybeNull(string)),
+                avatar: maybeUndefined(maybeNull(number)),
+            }),
+        ),
+    ),
 });
 
 const parseGameSettingsGalaxy: Validator<GameSettingsGalaxyReq> = object({

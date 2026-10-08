@@ -362,6 +362,16 @@ const checkForUnreadMessages = async () => {
   }
 };
 
+// AI opponents write messages from the background jobs process, which can't push
+// them live, so look for new messages after each tick while they think.
+const tickMessageChecks: ReturnType<typeof setTimeout>[] = [];
+
+const onGameTick = () => {
+  checkForUnreadMessages();
+  tickMessageChecks.push(setTimeout(checkForUnreadMessages, 20000));
+  tickMessageChecks.push(setTimeout(checkForUnreadMessages, 60000));
+};
+
 const checkForUnreadEvents = async () => {
   if (!userPlayer.value) {
     return;
@@ -389,6 +399,7 @@ onMounted(async () => {
   setupTimer();
 
   eventBus.on(GameEventBusEventNames.GameStarted, gameStarted);
+  eventBus.on(GameEventBusEventNames.OnGameTick, onGameTick);
   eventBus.on(UserEventBusEventNames.GameMessageSent, checkForUnreadMessages);
   eventBus.on(
     PlayerEventBusEventNames.GameConversationRead,
@@ -414,6 +425,8 @@ onMounted(async () => {
 
   onUnmounted(() => {
     eventBus.off(GameEventBusEventNames.GameStarted, gameStarted);
+    eventBus.off(GameEventBusEventNames.OnGameTick, onGameTick);
+    tickMessageChecks.forEach(clearTimeout);
     eventBus.off(
       UserEventBusEventNames.GameMessageSent,
       checkForUnreadMessages,

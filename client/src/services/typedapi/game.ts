@@ -13,6 +13,7 @@ import {
   type GameStateDetail,
   type GameGalaxyDetail,
   type UserListGame,
+  type GameStory,
 } from "@solaris/common";
 import {
   doDelete,
@@ -411,6 +412,17 @@ export const resetQuitters =
       routes.resetQuitters,
       { gameId },
       {},
+      {},
+      { withCredentials: true },
+    );
+  };
+
+export const getGameStory =
+  (axios: Axios) =>
+  async (gameId: string): Promise<ResponseResult<GameStory<string>>> => {
+    return doGet(axios)(
+      routes.getStory,
+      { gameId },
       {},
       { withCredentials: true },
     );

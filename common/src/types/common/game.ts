@@ -7,6 +7,7 @@ import type { CustomGalaxy } from "./customGalaxy";
 
 export const GAME_TYPES = [
     "tutorial",
+    "single_player",
     "custom",
     "standard_rt",
     "standard_tb",
@@ -45,6 +46,26 @@ export type GamePlayerType = "all" | "establishedPlayers";
 export type GamePlayerAnonymity = "normal" | "extra" | "revealAtEnd";
 export type GamePlayerOnlineStatus = "hidden" | "visible";
 export type GameSettingEnabledDisabled = "disabled" | "enabled";
+
+// How strong AI opponents play relative to the human players. "classic" is the
+// original AI with no adjustment.
+export const AI_DIFFICULTIES = [
+    "classic",
+    "easy",
+    "normal",
+    "hard",
+    "brutal",
+] as const;
+export type AiDifficulty = (typeof AI_DIFFICULTIES)[number];
+
+// What the game's creator picked for one AI opponent. Only used while creating the
+// game, so other players can't read the bots' personas in the settings.
+export interface AiOpponentChoice {
+    // A persona key, "random" for a generated persona, or "any".
+    persona?: string | null;
+    alias?: string | null;
+    avatar?: number | null;
+}
 
 export const GAME_AWARD_RANK_TO = [
     "all",
@@ -233,8 +254,9 @@ export const GAME_TIME_START_DELAYS = [
 
 export type GameTimeStartDelay = (typeof GAME_TIME_START_DELAYS)[number];
 
+// 0 means no limit: the turn waits until everyone is ready (single player only).
 export const GAME_TIME_MAX_TURN_WAITS = [
-    1, 5, 10, 30, 60, 120, 240, 360, 480, 600, 720, 1080, 1440, 2880,
+    0, 1, 5, 10, 30, 60, 120, 240, 360, 480, 600, 720, 1080, 1440, 2880,
 ] as const;
 
 export type GameTimeMaxTurnWait = (typeof GAME_TIME_MAX_TURN_WAITS)[number];
@@ -305,6 +327,12 @@ export type GameSettingsGeneralBase = {
     readyToQuitTimerCycles?: ReadyToQuitTimerCycles;
     readyToQuitVisibility: ReadyToQuitVisibility;
     joinRandomSlot: GameSettingEnabledDisabled;
+    // Slots taken by AI opponents with personas in a game with several humans.
+    aiOpponents?: number;
+    aiDifficulty?: AiDifficulty;
+    // Whether AI opponents keep human hours: asleep at night, busy part of the day.
+    aiOnlineHours?: GameSettingEnabledDisabled;
+    aiOpponentChoices?: AiOpponentChoice[];
 };
 
 export type GameSettingsGeneral<ID> = GameSettingsGeneralBase & {

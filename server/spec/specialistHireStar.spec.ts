@@ -30,7 +30,7 @@ describe("specialistHire - Star", () => {
                 },
             },
             gameTypeService: {
-                isTutorialGame: () => {
+                isSoloGame: () => {
                     return false;
                 },
             },

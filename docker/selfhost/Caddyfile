@@ -1,0 +1,18 @@
+# Serves the client and API from one address. The client loads its config from
+# /api/config on the same origin, so the API must sit behind the same host.
+# With a real domain as SITE_ADDRESS, Caddy fetches an HTTPS certificate automatically.
+{$SITE_ADDRESS} {
+	encode gzip
+
+	handle /api/* {
+		reverse_proxy api:3000
+	}
+
+	handle /socket.io/* {
+		reverse_proxy api:3000
+	}
+
+	handle {
+		reverse_proxy client:8080
+	}
+}

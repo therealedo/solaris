@@ -278,7 +278,7 @@ export default class GameJoinService extends EventEmitter {
 
         await game.save();
 
-        if (player.userId && !this.gameTypeService.isTutorialGame(game)) {
+        if (player.userId && !this.gameTypeService.isSoloGame(game)) {
             await this.achievementService.incrementJoined(player.userId);
         }
 
@@ -376,15 +376,21 @@ export default class GameJoinService extends EventEmitter {
 
         // If the game hasn't started yet then check if the game is full
         if (!game.state.startDate) {
+            // Slots given to AI opponents when the game was created count as filled.
+            const aiOpponentSlots = game.galaxy.players.filter(
+                (p) => !p.userId && p.aiPersona && !p.isOpenSlot,
+            ).length;
+
             // Start the game if all slots have been filled
             // OR its a new player game, half or more are filled
-            // OR its a tutorial game and a player has joined
+            // OR its a solo game (tutorial or single player) and a player has joined
             shouldStartGame =
-                game.state.players === game.settings.general.playerLimit ||
+                game.state.players + aiOpponentSlots ===
+                    game.settings.general.playerLimit ||
                 (this.gameTypeService.isNewPlayerGame(game) &&
                     game.state.players >=
                         game.settings.general.playerLimit / 2) ||
-                (this.gameTypeService.isTutorialGame(game) &&
+                (this.gameTypeService.isSoloGame(game) &&
                     game.state.players > 0);
 
             if (shouldStartGame) {
@@ -406,7 +412,11 @@ export default class GameJoinService extends EventEmitter {
     startGame(game: Game) {
         let startDate = DateTime.utc();
 
-        if (this.gameTypeService.isRealTimeGame(game)) {
+        // Solo games have nobody else to wait for, so they start straight away.
+        if (
+            this.gameTypeService.isRealTimeGame(game) &&
+            !this.gameTypeService.isSoloGame(game)
+        ) {
             // Add the start delay to the start date.
             startDate = startDate.plus({
                 minutes: game.settings.gameTime.startDelay,
@@ -427,15 +437,28 @@ export default class GameJoinService extends EventEmitter {
     assignNonUserPlayersToAI(
         game: Game,
         slotsOpen: boolean | undefined = undefined,
+        // Defaults to every slot without a user, except AI opponents with personas,
+        // which were set up when the game was created.
+        only: Player[] | undefined = undefined,
     ) {
         // For all AI, assign a random alias and an avatar.
-        const players = game.galaxy.players.filter((p) => p.userId == null);
+        const players =
+            only ??
+            game.galaxy.players.filter((p) => p.userId == null && !p.aiPersona);
 
         if (!players.length) {
             return;
         }
 
-        const aliases = this.avatarService.listAllAliases();
+        // Don't reuse a name another player in the game already has.
+        const takenAliases = new Set(
+            game.galaxy.players
+                .filter((p) => !players.includes(p))
+                .map((p) => p.alias),
+        );
+        const aliases = this.avatarService
+            .listAllAliases()
+            .filter((a) => !takenAliases.has(a));
         const avatars = this.avatarService.listAllSolarisAvatars();
 
         for (const player of players) {
@@ -466,8 +489,8 @@ export default class GameJoinService extends EventEmitter {
             }
 
             if (slotsOpen === undefined) {
-                // If it's a tutorial game we want to keep the slot closed.
-                player.isOpenSlot = !this.gameTypeService.isTutorialGame(game);
+                // If it's a solo game (tutorial or single player) we want to keep the slot closed.
+                player.isOpenSlot = !this.gameTypeService.isSoloGame(game);
             } else {
                 player.isOpenSlot = slotsOpen;
             }

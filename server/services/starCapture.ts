@@ -52,7 +52,7 @@ export default class StarCaptureService {
         attackerCarriers: Carrier<DBObjectId>[],
         statisticsService: IStatisticsService,
     ): StarCaptureResult {
-        const isTutorialGame = this.gameTypeService.isTutorialGame(game);
+        const isSoloGame = this.gameTypeService.isSoloGame(game);
 
         const specialist = this.specialistService.getByIdStar(
             star.specialistId,
@@ -122,7 +122,7 @@ export default class StarCaptureService {
         // Reset the ignore bulk upgrade statuses as it has been captured by a new player.
         this.starService.resetIgnoreBulkUpgradeStatuses(star);
 
-        if (!isTutorialGame) {
+        if (!isSoloGame) {
             if (ownerUser && !owner.defeated) {
                 statisticsService.modifyStats(game._id, owner._id, (stats) => {
                     stats.combat.stars.lost += 1;

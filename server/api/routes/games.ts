@@ -404,6 +404,20 @@ export default (
     );
 
     answer(
+        routes.getStory,
+        mw.auth.authenticate(),
+        mw.game.loadGame({
+            lean: true,
+            settings: true,
+            state: true,
+            galaxy: true,
+            conversations: true,
+        }),
+        mw.player.loadPlayer,
+        controller.getStory,
+    );
+
+    answer(
         routes.resetQuitters,
         mw.auth.authenticate(),
         mw.game.loadGame({
