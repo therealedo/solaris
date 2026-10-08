@@ -17,7 +17,7 @@ docker compose -f docker/selfhost/docker-compose.yml --env-file docker/selfhost/
 ```
 
 The first build takes a few minutes. Then open http://localhost, create an account and
-click **Play vs AI** on the games list. Turn based games tick as soon as you press ready;
+click **Create Game** on the games list, then tick **Single player against AI**. Turn based games tick as soon as you press ready;
 real-time games tick on the speed you chose.
 
 Stop it with `docker compose -f docker/selfhost/docker-compose.yml down` (add `-v` to wipe the database).

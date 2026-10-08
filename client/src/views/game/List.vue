@@ -510,12 +510,6 @@
             ><i class="fas fa-gamepad"></i> Create Game</router-link
           >
           <router-link
-            :to="{ path: '/game/create', query: { singlePlayer: 'true' } }"
-            tag="button"
-            class="btn btn-primary me-1"
-            ><i class="fas fa-robot"></i> Play vs AI</router-link
-          >
-          <router-link
             to="/game/active-games"
             tag="button"
             class="btn btn-success ms-1"
@@ -594,12 +588,6 @@
             ><i class="fas fa-gamepad"></i> Create Game</router-link
           >
           <router-link
-            :to="{ path: '/game/create', query: { singlePlayer: 'true' } }"
-            tag="button"
-            class="btn btn-primary me-1"
-            ><i class="fas fa-robot"></i> Play vs AI</router-link
-          >
-          <router-link
             to="/game/active-games"
             tag="button"
             class="btn btn-success ms-1"
@@ -674,12 +662,6 @@
         <div class="text-end" v-if="!isLoading">
           <router-link to="/game/create" tag="button" class="btn btn-info me-1"
             ><i class="fas fa-gamepad"></i> Create Game</router-link
-          >
-          <router-link
-            :to="{ path: '/game/create', query: { singlePlayer: 'true' } }"
-            tag="button"
-            class="btn btn-primary me-1"
-            ><i class="fas fa-robot"></i> Play vs AI</router-link
           >
           <router-link
             to="/game/active-games"
@@ -786,12 +768,6 @@
             ><i class="fas fa-gamepad"></i> Create Game</router-link
           >
           <router-link
-            :to="{ path: '/game/create', query: { singlePlayer: 'true' } }"
-            tag="button"
-            class="btn btn-primary me-1"
-            ><i class="fas fa-robot"></i> Play vs AI</router-link
-          >
-          <router-link
             to="/game/active-games"
             tag="button"
             class="btn btn-success ms-1"
@@ -866,12 +842,6 @@
         <div class="text-end" v-if="!isLoading">
           <router-link to="/game/create" tag="button" class="btn btn-info me-1"
             ><i class="fas fa-gamepad"></i> Create Game</router-link
-          >
-          <router-link
-            :to="{ path: '/game/create', query: { singlePlayer: 'true' } }"
-            tag="button"
-            class="btn btn-primary me-1"
-            ><i class="fas fa-robot"></i> Play vs AI</router-link
           >
           <router-link
             to="/game/active-games"
