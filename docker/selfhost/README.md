@@ -88,6 +88,11 @@ bots play compared to the humans (Easy, Normal, Hard, Brutal; Classic is the ori
 Bots earn more or fewer credits each cycle to stay at that level. In a normal game,
 **AI Opponents** gives some slots to persona bots, and the game starts when humans fill the rest.
 
+Bots also rethink their plans between cycles when something big happens (a lost star, a
+betrayal, an attack on their home world), at most twice per cycle each. Set
+`LLM_REVIEW_REPLIES=true` in `.env` to have a second Gemini request double check chat
+replies that change diplomacy; it uses more of the free quota.
+
 **Updating** after new commits: `git pull` and run the same `up -d --build` command.
 
 **Things to know**

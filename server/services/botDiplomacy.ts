@@ -16,6 +16,7 @@ import { IEventService } from "./types/IEventService";
 import { INotificationService } from "./types/INotificationService";
 import { Player } from "./types/Player";
 import {
+    AllianceOfferDecision,
     BotMessageKey,
     PROPOSAL_COOLDOWN_CYCLES,
     PlayerStrength,
@@ -641,8 +642,18 @@ export default class BotDiplomacyService {
         }
     }
 
-    _decideOffer(ctx: TurnContext, bot: Player, other: Player) {
+    _decideOffer(
+        ctx: TurnContext,
+        bot: Player,
+        other: Player,
+    ): AllianceOfferDecision {
         const offerer = ctx.strengths.get(other._id.toString())!;
+        const feeling = bot.aiPersona?.feelings?.[other._id.toString()];
+
+        // A bot still furious about what they did won't ally, whatever is said.
+        if (feeling && (feeling.anger >= 0.6 || feeling.trust <= -0.5)) {
+            return { accept: false, reason: "distrust" };
+        }
 
         return decideAllianceOffer({
             offerer,

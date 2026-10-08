@@ -1,3 +1,4 @@
+import { pickAgenda } from "./botAgendas";
 import { AiPersonaState } from "./types/Ai";
 
 // Personalities given to AI opponents. Each persona drives how a bot
@@ -157,6 +158,7 @@ export function createPersonaStates(
                 aggression: quirk(),
                 honesty: quirk(),
             },
+            agenda: pickAgenda(random),
         }),
     );
 }

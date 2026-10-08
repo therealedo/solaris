@@ -43,5 +43,7 @@ export interface Config {
         // Budget per server process (the API and jobs processes each have one).
         requestsPerMinute: number;
         requestsPerDay: number;
+        // Double check chat replies that change diplomacy with a second request.
+        reviewReplies: boolean;
     };
 }

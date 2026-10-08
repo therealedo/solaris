@@ -34,6 +34,9 @@ import { IStatisticsService } from "./types/IStatisticsService";
 
 const Heap = require("qheap");
 
+// How much more an AI opponent wants the stars of the empire its plan focuses on.
+const FOCUS_TARGET_MULTIPLIER = 3;
+
 const FIRST_TICK_BULK_UPGRADE_SCI_PERCENTAGE = 20;
 const FIRST_TICK_BULK_UPGRADE_IND_PERCENTAGE = 30;
 const LAST_TICK_BULK_UPGRADE_ECO_PERCENTAGE = 100;
@@ -1660,7 +1663,14 @@ export default class AIService {
                             star.location,
                         );
                     const relativeDistance = hyperspaceRange / distance;
-                    const score = starScore * relativeDistance;
+                    // A persona's plan can name an empire to go after first.
+                    const focus =
+                        player.aiPersona?.focusPlayerId &&
+                        star.ownedByPlayerId?.toString() ===
+                            player.aiPersona.focusPlayerId
+                            ? FOCUS_TARGET_MULTIPLIER
+                            : 1;
+                    const score = starScore * relativeDistance * focus;
 
                     let order = orders.get(reachable);
                     if (order) {

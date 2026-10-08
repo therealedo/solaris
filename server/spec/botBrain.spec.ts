@@ -25,6 +25,9 @@ describe("botBrain", () => {
     let brain: BotBrainService;
     let gameLocked: boolean;
     let delays: number;
+    let creditsSent: { from: string; to: string; amount: number }[];
+    let reviewReplies: boolean;
+    let randomValue: number;
 
     const fakeEventService: any = {
         createPlayerDiplomacyStatusChanged: async () => {},
@@ -131,6 +134,17 @@ describe("botBrain", () => {
                 await work();
                 return true;
             },
+            {
+                random: () => randomValue,
+                reviewReplies,
+                sendCredits: async (ctx, from, to, amount) => {
+                    creditsSent.push({
+                        from: from._id as any,
+                        to: to._id as any,
+                        amount,
+                    });
+                },
+            },
         );
     };
 
@@ -193,6 +207,9 @@ describe("botBrain", () => {
         llmRequests = [];
         gameLocked = false;
         delays = 0;
+        creditsSent = [];
+        reviewReplies = false;
+        randomValue = 0.5;
     });
 
     const status = () =>
@@ -268,7 +285,7 @@ describe("botBrain", () => {
         expect(status().statusTo).toBe("allies");
         expect(sent.map((s) => s.convo._id)).toEqual(["dm", "global"]);
         expect(bot.aiPersona.lastStrategyCycle).toBe(1);
-        expect(bot.aiPersona.notes[0]).toContain("Cycle 1 plan");
+        expect(bot.aiPersona.notes[0]).toContain("Tick 12 plan");
     });
 
     it("should retry the strategy turn later when out of quota", async () => {
@@ -398,10 +415,12 @@ describe("botBrain", () => {
             expect(parseChatDecision({})).toEqual({
                 reply: "",
                 action: "none",
-                memoryNote: "",
+                memoryKind: "none",
+                memorySummary: "",
             });
             expect(parseStrategyDecision({ plan: "x" })).toEqual({
                 plan: "x",
+                focus: "",
                 actions: [],
                 messages: [],
             });
@@ -696,6 +715,340 @@ describe("botBrain", () => {
 
             expect(llmRequests.length).toBe(8);
             expect(sent.length).toBe(10);
+        });
+    });
+
+    describe("events, feelings and replanning", () => {
+        const tickGame = async (ticks = 1) => {
+            game.state.tick += ticks;
+            await brain.playStrategyTurns(GAME_ID, fakeEventService, {} as any);
+        };
+
+        beforeEach(() => {
+            brain = createBrain(true);
+            // The scheduled plan for this cycle is already done.
+            bot.aiPersona.lastStrategyCycle = 1;
+            bot.aiPersona.lastPlanTick = 10;
+            bot.aiPersona.feelingsCycle = 1;
+        });
+
+        it("should only record a baseline the first time it looks", async () => {
+            await brain.playStrategyTurns(GAME_ID, fakeEventService, {} as any);
+
+            expect(llmRequests.length).toBe(0);
+            expect(bot.aiPersona.recentEvents ?? []).toEqual([]);
+        });
+
+        it("should rethink its plan when betrayed, and remember how it feels", async () => {
+            diplomacyService.declareAlly(
+                fakeEventService as any,
+                game,
+                human._id,
+                bot._id,
+                false,
+            );
+            diplomacyService.declareAlly(
+                fakeEventService as any,
+                game,
+                bot._id,
+                human._id,
+                false,
+            );
+            await tickGame();
+
+            await diplomacyService.declareEnemy(
+                fakeEventService as any,
+                game,
+                human._id,
+                bot._id,
+                false,
+            );
+            llmResponses.push({
+                plan: "Hero betrayed me. Strike back hard.",
+                focus: "Hero",
+                actions: [{ target: "Hero", action: "declareWar", credits: 0 }],
+                messages: [{ to: "Hero", text: "You will regret this." }],
+            });
+            await tickGame(2);
+
+            expect(llmRequests.length).toBe(1);
+            expect(llmRequests[0].prompt).toContain(
+                "Something important just happened",
+            );
+            expect(llmRequests[0].prompt).toContain("broke your alliance");
+            expect(bot.aiPersona.recentEvents[0]).toContain(
+                "broke your alliance",
+            );
+            expect(bot.aiPersona.feelings.human.trust).toBeLessThan(0);
+            expect(bot.aiPersona.feelings.human.anger).toBeGreaterThan(0);
+            expect(bot.aiPersona.focusPlayerId).toBe("human");
+            expect(bot.aiPersona.replans).toEqual({ cycle: 1, count: 1 });
+            expect(sent.map((m) => m.message)).toEqual([
+                "You will regret this.",
+            ]);
+        });
+
+        it("should not rethink over small events or too often", async () => {
+            await tickGame();
+            diplomacyService.declareAlly(
+                fakeEventService as any,
+                game,
+                human._id,
+                bot._id,
+                false,
+            );
+            await tickGame(2); // an alliance offer alone isn't enough
+
+            expect(llmRequests.length).toBe(0);
+            expect(bot.aiPersona.recentEvents[0]).toContain(
+                "offered you an alliance",
+            );
+
+            bot.aiPersona.lastPlanTick = game.state.tick; // just planned
+            await diplomacyService.declareEnemy(
+                fakeEventService as any,
+                game,
+                human._id,
+                bot._id,
+                false,
+            );
+            await tickGame(1);
+
+            expect(llmRequests.length).toBe(0);
+        });
+
+        it("should stop rethinking after the cap for the cycle", async () => {
+            bot.aiPersona.replans = { cycle: 1, count: 2 };
+            diplomacyService.declareAlly(
+                fakeEventService as any,
+                game,
+                human._id,
+                bot._id,
+                false,
+            );
+            diplomacyService.declareAlly(
+                fakeEventService as any,
+                game,
+                bot._id,
+                human._id,
+                false,
+            );
+            await tickGame();
+            await diplomacyService.declareEnemy(
+                fakeEventService as any,
+                game,
+                human._id,
+                bot._id,
+                false,
+            );
+            await tickGame(2);
+
+            expect(llmRequests.length).toBe(0);
+        });
+
+        it("should notice gifts and feel warmer", async () => {
+            brain = createBrain(false);
+            bot.reputations = [{ playerId: "human", score: 0 }];
+            await tickGame();
+            bot.reputations[0].score = 2;
+            await tickGame();
+
+            expect(bot.aiPersona.recentEvents[0]).toContain(
+                "sent you a valuable gift",
+            );
+            expect(bot.aiPersona.feelings.human.trust).toBeGreaterThan(0);
+        });
+
+        it("should refuse to ally with someone it is furious with", async () => {
+            bot.aiPersona.feelings = { human: { trust: 0, anger: 0.8 } };
+            llmResponses.push({
+                reply: "Fine.",
+                action: "ally",
+                memoryKind: "none",
+                memorySummary: "",
+            });
+
+            await brain.replyToConversation(
+                GAME_ID,
+                DM_ID,
+                fakeEventService,
+                {} as any,
+            );
+
+            expect(status().statusTo).not.toBe("allies");
+        });
+    });
+
+    describe("scheming", () => {
+        it("should pay credits, capped at a share of its treasury", async () => {
+            brain = createBrain(true);
+            bot.credits = 1000;
+            llmResponses.push({
+                plan: "Pay Hero to attack the others.",
+                focus: "none",
+                actions: [
+                    { target: "Hero", action: "sendCredits", credits: 900 },
+                ],
+                messages: [],
+            });
+
+            await brain.playStrategyTurns(GAME_ID, fakeEventService, {} as any);
+
+            expect(creditsSent).toEqual([
+                { from: "bot", to: "human", amount: 300 },
+            ]);
+            expect(bot.aiPersona.focusPlayerId).toBeNull();
+        });
+
+        it("should show messages from other empires in its plan", async () => {
+            brain = createBrain(true);
+            bot.aiPersona.agenda = { key: "survive", targetPlayerId: null };
+            llmResponses.push({
+                plan: "",
+                focus: "none",
+                actions: [],
+                messages: [],
+            });
+
+            await brain.playStrategyTurns(GAME_ID, fakeEventService, {} as any);
+
+            const prompt: string = llmRequests[0].prompt;
+            expect(prompt).toContain("Messages to you since your last plan");
+            expect(prompt).toContain("Hero: Robo, shall we join forces?");
+            expect(llmRequests[0].system).toContain("secret goal");
+        });
+
+        it("should pick a rival for a rival agenda", async () => {
+            brain = createBrain(false);
+            bot.aiPersona.agenda = { key: "rival", targetPlayerId: null };
+
+            await brain.playStrategyTurns(GAME_ID, fakeEventService, {} as any);
+
+            expect(bot.aiPersona.agenda.targetPlayerId).toBe("human");
+        });
+    });
+
+    describe("end of game debrief", () => {
+        beforeEach(() => {
+            game.state.endDate = new Date();
+            game.state.winner = "human";
+            game.constants.distances.galaxyCenterLocation = { x: 0, y: 0 };
+            bot.aiPersona.agenda = { key: "survive", targetPlayerId: null };
+        });
+
+        it("should reveal its persona and secret goal once", async () => {
+            brain = createBrain(false);
+
+            await brain.playStrategyTurns(GAME_ID, fakeEventService, {} as any);
+            await brain.playStrategyTurns(GAME_ID, fakeEventService, {} as any);
+
+            expect(sent.length).toBe(1);
+            expect(sent[0].convo._id).toBe("global");
+            expect(sent[0].message).toContain("The Silver Tongue");
+            expect(sent[0].message).toContain(
+                "survive to the very end, and I did it",
+            );
+            expect(bot.aiPersona.debriefed).toBeTrue();
+        });
+
+        it("should say goodbye in character with an LLM", async () => {
+            brain = createBrain(true);
+            llmResponses.push({
+                message: "I meant to betray you all along, Hero. Well played.",
+            });
+
+            await brain.playStrategyTurns(GAME_ID, fakeEventService, {} as any);
+
+            expect(sent[0].message).toContain("betray you all along");
+            expect(llmRequests[0].prompt).toContain(
+                "The game is over. Hero won.",
+            );
+        });
+    });
+
+    describe("second opinion and rhythm", () => {
+        it("should drop an action a review judges manipulated", async () => {
+            reviewReplies = true;
+            brain = createBrain(true);
+            llmResponses.push(
+                {
+                    reply: "As you wish.",
+                    action: "ally",
+                    memoryKind: "none",
+                    memorySummary: "",
+                },
+                { approved: false },
+            );
+
+            await brain.replyToConversation(
+                GAME_ID,
+                DM_ID,
+                fakeEventService,
+                {} as any,
+            );
+
+            // The rule based reply answers instead, and decides on its own.
+            expect(llmRequests.length).toBe(2);
+            expect(sent.length).toBe(1);
+            expect(sent[0].message).not.toBe("As you wish.");
+        });
+
+        it("should keep an approved action", async () => {
+            reviewReplies = true;
+            brain = createBrain(true);
+            llmResponses.push(
+                {
+                    reply: "Together, then.",
+                    action: "ally",
+                    memoryKind: "promise_made",
+                    memorySummary: "Promised Hero an alliance.",
+                },
+                { approved: true },
+            );
+
+            await brain.replyToConversation(
+                GAME_ID,
+                DM_ID,
+                fakeEventService,
+                {} as any,
+            );
+
+            expect(status().statusTo).toBe("allies");
+            expect(bot.aiPersona.notes[0]).toBe(
+                "You promised (Hero): Promised Hero an alliance.",
+            );
+        });
+
+        it("should take its time like a person", () => {
+            brain = createBrain(false);
+
+            randomValue = 0.5;
+            expect(brain._replyDelayMs()).toBeLessThan(6000);
+            randomValue = 0.1;
+            expect(brain._replyDelayMs()).toBeGreaterThanOrEqual(8000);
+            randomValue = 0.01;
+            expect(brain._replyDelayMs()).toBeGreaterThanOrEqual(30000);
+        });
+
+        it("should sometimes let a remark in global chat pass", async () => {
+            brain = createBrain(false);
+            randomValue = 0.1;
+            game.conversations[1].participants.push("someoneElse");
+            game.conversations[1].messages.push({
+                fromPlayerId: "human",
+                fromPlayerAlias: "Hero",
+                message: "Robo is all talk.",
+                sentTick: 12,
+            });
+
+            await brain.replyToConversation(
+                GAME_ID,
+                "global" as any,
+                fakeEventService,
+                {} as any,
+            );
+
+            expect(sent.length).toBe(0);
         });
     });
 });

@@ -789,6 +789,20 @@ export default (
                 }
             }
         },
+        {
+            sendCredits: async (ctx, bot, target, amount) => {
+                await tradeService.sendCredits(
+                    ctx.game,
+                    bot,
+                    target._id,
+                    amount,
+                    ctx.eventService,
+                    statisticsService,
+                    ctx.notificationService,
+                );
+            },
+            reviewReplies: config.llm.reviewReplies,
+        },
     );
     const gameTickService = new GameTickService(
         distanceService,

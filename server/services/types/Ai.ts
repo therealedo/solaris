@@ -34,6 +34,34 @@ export interface AiPersonaState {
     // Per bot shifts to the persona's traits, so two bots with the same persona
     // don't behave identically.
     quirks?: PersonaQuirks;
+    // A secret goal, revealed when the game ends.
+    agenda?: BotAgenda;
+    // Feelings towards other empires by player id, moved by events and fading over time.
+    feelings?: Record<string, BotFeeling>;
+    // Production cycle the feelings last faded in.
+    feelingsCycle?: number;
+    // What the bot noticed recently, newest last.
+    recentEvents?: string[];
+    // The empire the bot's fleets should prioritise attacking.
+    focusPlayerId?: string | null;
+    // Tick of the last plan, and how many unscheduled replans this cycle.
+    lastPlanTick?: number;
+    replans?: { cycle: number; count: number };
+    // Set once the bot has posted its end of game debrief.
+    debriefed?: boolean;
+}
+
+export interface BotFeeling {
+    // -1 (betrayed) to 1 (complete trust).
+    trust: number;
+    // 0 (calm) to 1 (furious).
+    anger: number;
+}
+
+export interface BotAgenda {
+    key: string;
+    // The player a "rival" agenda is about, picked once the game has started.
+    targetPlayerId?: string | null;
 }
 
 export interface PersonaQuirks {
